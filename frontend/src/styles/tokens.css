@@ -1,0 +1,88 @@
+/* Design tokens from chitcircle-design.md + Stitch DESIGN.md. Components use semantic tokens only. */
+:root {
+  --brand-blue: #4169e1;
+  --brand-blue-pressed: #2f4fc4;
+  --on-brand: #ffffff;
+  --brand-soft: #e8ecff;
+  --brand-pale: #f1f2ff;
+  --brand-lavender: #b8c4ff;
+  --brand-text: #2f4fc4;          /* blue as TEXT on light surfaces (>= 4.5:1) */
+
+  --bg: #ffffff;
+  --surface: #f7f8f7;
+  --card: #ffffff;
+  --text: #171a18;
+  --text-muted: #666d68;          /* spec #777E79 darkened slightly to reach 4.5:1 on white */
+  --border: #e8ece9;
+
+  --income: #28b86a;              /* icons, fills */
+  --expense: #e45d5d;
+  --warning: #e7a83e;
+  --info: #4b8dde;
+  --income-text: #1a8248;         /* amounts / pill text, >= 4.5:1 on white */
+  --expense-text: #c23f3f;
+  --warning-text: #8a5a00;
+  --info-text: #2563b0;
+
+  --tint-income: rgba(40, 184, 106, 0.13);
+  --tint-expense: rgba(228, 93, 93, 0.12);
+  --tint-warning: rgba(231, 168, 62, 0.18);
+  --tint-info: rgba(75, 141, 222, 0.14);
+  --tint-neutral: rgba(23, 26, 24, 0.06);
+  --demo-bg: #fff8ed;
+
+  --shadow-card: 0 2px 8px -2px rgba(23, 26, 24, 0.05), 0 1px 4px -1px rgba(23, 26, 24, 0.03);
+  --shadow-bar: 0 -4px 16px rgba(0, 0, 0, 0.05);
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.12);
+  --scrim: rgba(17, 20, 18, 0.45);
+
+  --radius-card: 18px;
+  --radius-tile: 14px;
+  --radius-input: 14px;
+  --radius-pill: 9999px;
+
+  --font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --nav-h: 60px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --brand-blue: #8fa8ff;
+  --brand-blue-pressed: #b3c3ff;
+  --on-brand: #0f1a45;
+  --brand-soft: #292d4d;
+  --brand-pale: #222642;
+  --brand-lavender: #4a5390;
+  --brand-text: #a9bbff;
+
+  --bg: #111412;
+  --surface: #191e1b;
+  --card: #202722;
+  --text: #f3f6f3;
+  --text-muted: #a8b2ab;
+  --border: #303a33;
+
+  --income: #3ccf80;
+  --expense: #ff7777;
+  --warning: #f0be62;
+  --info: #7fb0f0;
+  --income-text: #5fdc97;
+  --expense-text: #ff8f8f;
+  --warning-text: #f0be62;
+  --info-text: #8dbbf5;
+
+  --tint-income: rgba(60, 207, 128, 0.16);
+  --tint-expense: rgba(255, 119, 119, 0.16);
+  --tint-warning: rgba(240, 190, 98, 0.16);
+  --tint-info: rgba(127, 176, 240, 0.16);
+  --tint-neutral: rgba(243, 246, 243, 0.08);
+  --demo-bg: #2b2517;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.02);
+  --shadow-bar: 0 -4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
