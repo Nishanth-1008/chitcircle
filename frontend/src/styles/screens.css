@@ -1,0 +1,21 @@
+.greeting { display: flex; align-items: center; gap: 12px; }
+.greeting h1 { font-size: 22px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; }
+.due-card { display: grid; gap: 10px; }
+.due-card__amount { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.circle-card__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.circle-card__name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.action-item { display: flex; gap: 12px; align-items: center; min-height: 56px; }
+.action-item .glyph { width: 40px; height: 40px; }
+.link-list a { display: flex; align-items: center; justify-content: space-between; min-height: 52px; border-bottom: 1px solid var(--border); font-weight: 500; }
+.link-list a:last-child { border-bottom: 0; }
+.link-list svg { width: 18px; height: 18px; color: var(--text-muted); }
+.api-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.api-table td { padding: 10px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.api-table tr:last-child td { border-bottom: 0; }
+.api-table code { font-size: 12px; background: var(--surface); padding: 1px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+details.faq { border-bottom: 1px solid var(--border); }
+details.faq summary { min-height: 52px; display: flex; align-items: center; font-weight: 600; cursor: pointer; list-style: none; }
+details.faq summary::-webkit-details-marker { display: none; }
+details.faq p { padding-bottom: 14px; color: var(--text-muted); }
+a.card.action-item, a.card.row { display: flex; align-items: center; }
+.activity__right .row { flex-direction: column; align-items: flex-end; gap: 4px; }

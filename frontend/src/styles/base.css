@@ -1,0 +1,67 @@
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; font-family: var(--font); font-size: 14px; line-height: 20px; color: var(--text); background: var(--surface);
+  -webkit-font-smoothing: antialiased; font-feature-settings: 'cv11', 'ss01';
+}
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.015em; }
+h2 { font-size: 18px; line-height: 24px; font-weight: 600; }
+h3 { font-size: 16px; line-height: 22px; font-weight: 600; }
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+ul { margin: 0; padding: 0; list-style: none; }
+.num, .amount { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+.muted { color: var(--text-muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 2px; border-radius: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+}
+
+/* ---------- app frame ---------- */
+.frame { min-height: 100dvh; display: flex; justify-content: center; background: var(--surface); }
+.app { width: 100%; max-width: 480px; min-height: 100dvh; background: var(--bg); position: relative; display: flex; flex-direction: column; }
+@media (min-width: 520px) { .app { box-shadow: 0 0 0 1px var(--border); } }
+
+.topbar {
+  position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
+  padding: calc(10px + var(--safe-top)) 16px 10px; background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.topbar__title { flex: 1; min-width: 0; }
+.topbar__title h1 { font-size: 18px; line-height: 24px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar__back { display: inline-flex; width: 44px; height: 44px; margin-left: -12px; align-items: center; justify-content: center; border-radius: 50%; }
+.topbar__back:hover { background: var(--tint-neutral); }
+
+.screen { flex: 1; padding: 16px 16px calc(var(--nav-h) + var(--safe-bottom) + 32px); display: flex; flex-direction: column; gap: 16px; }
+.screen--plain { padding-bottom: calc(32px + var(--safe-bottom)); }
+
+.bottomnav {
+  position: fixed; bottom: 0; z-index: 30; width: 100%; max-width: 480px; display: grid; grid-template-columns: repeat(4, 1fr);
+  height: calc(var(--nav-h) + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
+  background: var(--card); border-top: 1px solid var(--border); box-shadow: var(--shadow-bar);
+}
+.bottomnav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 44px; color: var(--text-muted); font-size: 11px; font-weight: 500; }
+.bottomnav a[aria-current='page'] { color: var(--brand-blue); font-weight: 600; }
+.bottomnav svg { width: 24px; height: 24px; }
+
+/* ---------- wordmark ---------- */
+.wordmark { display: inline-flex; align-items: baseline; gap: 1px; font-weight: 800; letter-spacing: -0.03em; font-size: 20px; color: var(--text); }
+.wordmark b { color: var(--brand-blue); font-weight: 800; }
+.wordmark i { width: 6px; height: 6px; border-radius: 50%; background: var(--income); display: inline-block; margin-left: 2px; align-self: flex-end; margin-bottom: 4px; }
+.wordmark--lg { font-size: 36px; }
+.wordmark--lg i { width: 9px; height: 9px; margin-bottom: 7px; }
+
+/* ---------- banners ---------- */
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 18px; border: 1px solid transparent; }
+.banner svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
+.banner--demo { background: var(--demo-bg); border-color: var(--warning); color: var(--warning-text); font-weight: 600; }
+.banner--info { background: var(--tint-info); color: var(--info-text); }
+.banner--warning { background: var(--tint-warning); color: var(--warning-text); }
+.banner--danger { background: var(--tint-expense); color: var(--expense-text); }
+.banner--neutral { background: var(--surface); color: var(--text-muted); border-color: var(--border); }
+.banner strong { font-weight: 600; }
+.banner--sticky { margin: 12px 16px 0; }
