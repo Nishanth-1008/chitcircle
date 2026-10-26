@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from . import config
+from .config import database_url
 from .models import Base
 
 engine = None
@@ -18,7 +18,7 @@ FOR EACH ROW EXECUTE FUNCTION chitcircle_ledger_immutable();
 
 
 def make_engine(url=None):
-    url = url or config.DATABASE_URL
+    url = url or database_url()
     kw = {}
     if url.startswith("sqlite"):
         kw["connect_args"] = {"check_same_thread": False}

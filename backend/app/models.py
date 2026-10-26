@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text,
+from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text,
                         UniqueConstraint, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -18,12 +18,24 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(20), default="member")  # organizer, member, approver, admin
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class Circle(Base):
     __tablename__ = "circles"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
     name: Mapped[str] = mapped_column(String(200))
     organizer_id: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    ledger_seq: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
 
 
 class RulesetRow(Base):
@@ -181,3 +193,45 @@ class ProviderEventRow(Base):
     currency: Mapped[str] = mapped_column(String(3))
     raw: Mapped[dict] = mapped_column(JSON)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class OutboxRow(Base):
+    """Transactional outbox: written in the same transaction as the ledger event."""
+    __tablename__ = "outbox"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    aggregate_type: Mapped[str] = mapped_column(String(50))
+    aggregate_id: Mapped[str] = mapped_column(String(36))
+    event_type: Mapped[str] = mapped_column(String(50))
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_outbox_unpublished", "id"),
+    )
+
+
+class ApiIdempotencyRow(Base):
+    """API idempotency (authoritative copy; Redis is only a fast path)."""
+    __tablename__ = "api_idempotency"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response: Mapped[dict] = mapped_column(JSON, nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ProposedActionRow(Base):
+    """Proposed actions from agents; humans approve before anything executes."""
+    __tablename__ = "proposed_actions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    circle_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(50))
+    params: Mapped[dict] = mapped_column(JSON)
+    rationale: Mapped[str] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String(20), default="PROPOSED")
+    proposed_by: Mapped[str] = mapped_column(String(50))
+    decided_by: Mapped[str] = mapped_column(String(36), nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
