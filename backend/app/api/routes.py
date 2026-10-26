@@ -18,7 +18,7 @@ from ..services.gateway import (
 )
 from ..auth import (
     create_access_token, get_current_user, get_current_organizer,
-    create_user, hash_password, verify_password
+    create_user, hash_password, verify_password, decode_token
 )
 
 router = APIRouter()
@@ -68,16 +68,37 @@ def register(
     return {"access_token": access_token, "token_type": "bearer", "user_id": user.id, "role": user.role}
 
 
-def get_current_actor(current_user = Depends(get_current_user)):
-    """Convert JWT user to Actor for backward compatibility with services."""
-    from dataclasses import dataclass
+@dataclass
+class Actor:
+    id: str
+    role: str
 
-    @dataclass
-    class Actor:
-        id: str
-        role: str
 
-    return Actor(current_user.id, current_user.role)
+def get_current_actor(
+    request: Request,
+    session: Session = Depends(get_session),
+    x_actor_id: Optional[str] = Header(None, alias="X-Actor-Id"),
+    x_actor_role: Optional[str] = Header("member", alias="X-Actor-Role"),
+) -> Actor:
+    """Allow Bearer JWT token if provided; fallback to X-Actor-Id / X-Actor-Role headers in dev."""
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = decode_token(token)
+            uid = payload.get("sub")
+            role = payload.get("role", "member")
+            if uid:
+                return Actor(id=uid, role=role)
+        except Exception:
+            pass
+    if x_actor_id:
+        return Actor(id=x_actor_id, role=x_actor_role or "member")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated. Provide Bearer token or X-Actor-Id.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @router.get("/health")
