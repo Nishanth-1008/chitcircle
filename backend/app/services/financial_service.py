@@ -33,7 +33,7 @@ from financial_engine.validation import check_settlement
 
 from ..errors import Conflict, Forbidden, NotFound, Unprocessable
 from ..models import (ApprovalRow, BidRow, Circle, Cycle, LedgerEventRow, LotteryRow, Member, Obligation,
-                      ProviderEventRow, RulesetRow, SettlementRow, StateTransition)
+                      ProviderEventRow, RulesetRow, SettlementRow, StateTransition, OutboxRow)
 from .gateway import PayoutGateway, PayoutStatus
 
 
@@ -120,6 +120,39 @@ def _emit(session: Session, *, circle_id: str, event_type: L.EventType, amount: 
         journal=journal.to_dict() if journal else None)
     session.add(row)
     session.flush()
+
+    # Increment circle ledger_seq for cache versioning/ETags
+    circle = session.get(Circle, circle_id)
+    if circle:
+        circle.ledger_seq = (circle.ledger_seq or 0) + 1
+
+    # Write to outbox for async consumers (projections, notifications, agents)
+    outbox_payload = {
+        "event_id": row.id,
+        "circle_id": circle_id,
+        "cycle_id": cycle_id,
+        "member_id": member_id,
+        "event_type": event_type.value,
+        "amount": amount.minor,
+        "currency": amount.currency,
+        "timestamp": row.timestamp.isoformat(),
+        "actor": actor,
+        "ruleset_version": ruleset_version,
+        "settlement_id": settlement_id,
+        "provider_ref": provider_ref,
+        "idempotency_key": idempotency_key,
+        "reverses_event_id": reverses,
+        "reason": reason,
+        "approval": approval,
+        "journal": journal.to_dict() if journal else None,
+    }
+    session.add(OutboxRow(
+        aggregate_type="ledger_event",
+        aggregate_id=row.id,
+        event_type=f"ledger.{event_type.value}",
+        payload=outbox_payload,
+    ))
+
     return row
 
 
