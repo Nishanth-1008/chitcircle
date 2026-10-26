@@ -1,6 +1,9 @@
 import os
+from dotenv import load_dotenv
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://chitcircle:chitcircle@localhost:5432/chitcircle")
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chitcircle.db")
 
 
 def webhook_secret():

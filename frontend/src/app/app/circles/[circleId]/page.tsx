@@ -49,9 +49,23 @@ export default function CircleDetailPage() {
   const [tab, setTab] = useState<Tab>('overview');
   const [roundId, setRoundId] = useState('');
   const [roundError, setRoundError] = useState('');
+  const [cycleCreateMsg, setCycleCreateMsg] = useState('');
 
   const circle = useApi(`circle:${sessionKey(ctx)}:${circleId}`, (s) => api.getCircle(ctx, circleId, s));
   useEffect(() => { if (circle.data) saved.saveCircle(circle.data.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [circle.data?.id]);
+
+  const createCycleAction = useSingleFlight(async () => {
+    setCycleCreateMsg('');
+    try {
+      const nextMonth = new Date();
+      nextMonth.setDate(nextMonth.getDate() + 30);
+      const res = await api.createCycle(ctx, circleId, { due_date: nextMonth.toISOString() });
+      saved.saveRound(res.id, circleId);
+      router.push(`/app/circles/${encodeURIComponent(circleId)}/cycles/${encodeURIComponent(res.id)}`);
+    } catch (e) {
+      setCycleCreateMsg(describeError(e).message);
+    }
+  });
 
   const open = useSingleFlight(async () => {
     const id = roundId.trim();
@@ -97,6 +111,16 @@ export default function CircleDetailPage() {
                       Chit value and installment terms aren’t returned by the circle endpoint yet. They appear on a round once the server provides them.
                     </Banner>
                   </section>
+                  {role === 'organizer' && ctx.mode === 'live' && (
+                    <section className="card stack" aria-label="Start new round">
+                      <h3>Start next round</h3>
+                      <p className="muted">Create and schedule the next monthly cycle for this circle on the server.</p>
+                      <Button variant="primary" disabled={createCycleAction.pending} onClick={() => void createCycleAction.run()}>
+                        {createCycleAction.pending ? 'Creating…' : 'Start Next Round'}
+                      </Button>
+                      {cycleCreateMsg && <Banner tone="info">{cycleCreateMsg}</Banner>}
+                    </section>
+                  )}
                   <section className="card stack" aria-label="Open a round">
                     <h3>Open a round</h3>
                     <form className="stack" onSubmit={(e) => { e.preventDefault(); void open.run(); }} noValidate>
