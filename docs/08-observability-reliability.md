@@ -40,6 +40,10 @@
 | Duplicate provider event rate spike | Investigate provider or retries |
 | Settlement calculated but not approved after N days | Notify organizer; operational dashboard |
 | Overpayment unrefunded more than 3 days | Ticket |
+| Mandate amount or parameter mismatch abort | Security alert; investigate immediately (integrity) |
+| Expired, revoked or already-consumed mandate used | Warn; investigate as abuse |
+| Agent execution above a per-action or per-circle cap | Page (should be impossible; caps must always hold) |
+| Kill switch activated (global or per-agent) | Notify on-call; confirm it was intentional |
 
 A nightly **invariant job** re-checks the engine's 12 financial invariants against stored data and fails loudly on any violation.
 
@@ -61,6 +65,7 @@ A nightly **invariant job** re-checks the engine's 12 financial invariants again
 3. **Money integrity:** invariants, journal balance, pending payouts, provider mismatch.
 4. **Performance:** latency, cache, DB.
 5. **Cost:** infra, provider fees, LLM, messaging.
+6. **Agent execution:** mandates issued / consumed / expired / revoked, amount-mismatch aborts, executions versus caps (must be zero over), kill-switch state, per-agent and per-circle execution volume.
 
 ## 7. Reliability design
 

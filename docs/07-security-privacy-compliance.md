@@ -46,7 +46,11 @@ TLS everywhere; HSTS; encryption at rest on database, cache snapshots and object
 | Bid manipulation or shill bidding | Eligibility rules, sealed-bid default, audit of bid history |
 | Account takeover | OTP, device binding, step-up on sensitive actions |
 | Insider misuse | Role separation, audit logs, access reviews |
-| Prompt injection into agents | Agents have read tools and `propose` only; no direct execution; inputs treated as untrusted (see `10`) |
+| Prompt injection into agents | Agents have read tools, `propose` and approval-gated `execute_mandate`; member-written text never reaches the execution path; inputs treated as untrusted (see `10`, `adr/0007`) |
+| Mandate replay (reusing a consumed mandate) | Single-use `state` plus unique `execution_idempotency_key`; only an `ISSUED` mandate executes, and only once; duplicate-use attempts alert |
+| Mandate parameter tampering (params edited after approval) | `params_hash` re-verified and the amount recomputed by the engine; any mismatch aborts before the provider call |
+| Prompt injection into proposals | Execution parameters come only from structured data; the approval screen shows the exact amount and recipient in plain language; the model cannot supply execution parameters |
+| Compromised approver device | Step-up auth (biometric or OTP), short mandate expiry, hard per-action and per-circle daily caps, velocity limits, second approver for payouts, kill switch, and an audited approval method and device |
 | SMS pumping and abuse | Rate limits, country allow-lists, provider fraud guards |
 
 ## 5. Privacy and data-protection law

@@ -64,6 +64,30 @@ CREATE TABLE proposed_actions (
   proposed_by text NOT NULL, decided_by uuid, decided_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Single-use mandate: the ONLY path by which an agent executes a payment-related action.
+-- Issued when a human approves a proposal with step-up auth (see 10-ai-agents.md, adr/0007).
+CREATE TABLE agent_mandates (
+  id                        uuid PRIMARY KEY,
+  proposed_action_id        uuid NOT NULL UNIQUE,   -- one mandate per proposal
+  circle_id                 uuid NOT NULL,
+  kind                      text NOT NULL,          -- action allow-list, never free-form
+  params                    jsonb NOT NULL,          -- recipient member id, amount (minor units), currency, cycle/settlement id
+  params_hash               text NOT NULL,           -- hash of the canonical parameters
+  max_amount_minor          bigint NOT NULL,          -- hard cap fixed at approval time
+  currency                  text NOT NULL,
+  approved_by               uuid NOT NULL,
+  approved_at               timestamptz NOT NULL,
+  approval_method           text NOT NULL,           -- step-up: BIOMETRIC | OTP
+  expires_at                timestamptz NOT NULL,
+  state                     text NOT NULL DEFAULT 'ISSUED',
+                            -- ISSUED | CONSUMED | EXPIRED | REVOKED
+  consumed_at               timestamptz,
+  execution_idempotency_key text NOT NULL UNIQUE,     -- mandate:{id}
+  result                    jsonb
+);
+-- Only an ISSUED mandate may execute, and only once: the unique execution key plus the
+-- single-use state make a replayed or double-fired execution a no-op.
 ```
 
 Also add: `users`, `user_contacts` (PII, encrypted), `consents`, `notification_prefs`, `notification_log`, `jobs` (scheduler), `read_model_*` tables (Phase 3), `circle_invites`, `organizer_payment_accounts` (the non-custodial link, see `06`).
@@ -90,6 +114,7 @@ The ledger and engine reference **member ids only**. Names, phones, emails, docu
 | Provider ingress | Unique `(provider, provider_event_id)` |
 | Provider egress | Provider request id header set to the business idempotency key (**VERIFY** supported header per endpoint) |
 | Consumers | Outbox consumers record processed event ids; re-delivery is a no-op |
+| Mandate execution | Unique `execution_idempotency_key` (`mandate:{id}`) on `agent_mandates`; only an `ISSUED` mandate executes, and only once |
 
 ## 6. Indexes to review first
 
