@@ -5,6 +5,8 @@ Every public function commits once at the end; any exception leaves nothing writ
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -31,8 +33,10 @@ from financial_engine.settlement import Settlement, calculate_settlement
 from financial_engine.states import EXCEPTION_STATES, CycleState as S, ensure_transition
 from financial_engine.validation import check_settlement
 
-from ..errors import Conflict, Forbidden, NotFound, Unprocessable
-from ..models import (ApprovalRow, BidRow, Circle, Cycle, LedgerEventRow, LotteryRow, Member, Obligation,
+from .. import config
+from ..errors import Conflict, Forbidden, NotFound, ServiceError, Unprocessable
+from ..models import (ApprovalRow, AgentMandate, BidRow, Circle, Cycle, FeatureFlag,
+                      LedgerEventRow, LotteryRow, Member, Obligation, ProposedActionRow,
                       ProviderEventRow, RulesetRow, SettlementRow, StateTransition, OutboxRow)
 from .gateway import PayoutGateway, PayoutStatus
 
@@ -308,30 +312,144 @@ def open_cycle(session: Session, cycle_id: str, actor_id: str) -> dict:
 
 
 # ---------------------------------------------------------------- payments (provider-verified only)
-def apply_provider_event(session: Session, p: dict) -> dict:
-    """Handle an already signature-verified provider callback. Duplicates are safely ignored."""
-    txn_id = p["provider_txn_id"]
-    if session.scalar(select(ProviderEventRow).where(ProviderEventRow.provider_txn_id == txn_id)):
-        return {"duplicate": True, "provider_txn_id": txn_id}
+PROVIDER_MAX_ATTEMPTS = 5
+
+
+def provider_backoff(attempts: int) -> int:
+    """Exponential backoff in seconds for a parked provider event: 5, 10, 20, ... capped at an hour."""
+    return min(5 * (2 ** max(0, attempts - 1)), 3600)
+
+
+def provider_event_id(provider: str, p: dict) -> str:
+    """Ingress dedupe key.
+
+    PayPal's event id when the payload carries one, otherwise a deterministic key derived from the
+    business fields. Deriving it keeps the legacy shape (no event id) idempotent on redelivery while
+    still letting a genuine state change on the same transaction through as its own event.
+    """
+    for k in ("event_id", "webhook_id", "notification_id"):
+        if p.get(k):
+            return str(p[k])
+    return f"{p.get('kind')}:{p.get('provider_txn_id')}:{p.get('status')}"
+
+
+def _ingest_provider_event(session: Session, p: dict, raw_body: str, signature_ok: bool,
+                           provider: str = "paypal") -> dict:
+    """Phase A: persist the raw callback. No business logic, no locks, no failures after commit."""
+    txn_id = p.get("provider_txn_id")
+    if not txn_id:
+        raise Unprocessable("provider_txn_id is required")
     try:
         kind = TxnKind(p["kind"])
-    except ValueError:
+    except (KeyError, ValueError):
         raise Unprocessable("unknown provider event kind")
-    if p["amount"] < 0:
+    if p.get("amount") is None or p["amount"] < 0:
         raise Unprocessable("amount must not be negative")
+    event_id = provider_event_id(provider, p)
+    existing = session.scalar(select(ProviderEventRow).where(ProviderEventRow.provider == provider,
+                                                             ProviderEventRow.provider_event_id == event_id))
+    if existing is not None:
+        return {"duplicate": True, "provider_event_id": event_id, "state": existing.state,
+                "provider_txn_id": existing.provider_txn_id}
+    row = ProviderEventRow(provider=provider, provider_event_id=event_id, provider_txn_id=txn_id,
+                           kind=kind.value, status=p.get("status", ""), state="RECEIVED",
+                           raw=p, raw_body=raw_body, signature_ok=signature_ok, attempts=0)
+    session.add(row)
+    session.commit()                                   # durable before anything is applied
+    return {"duplicate": False, "provider_event_id": event_id, "id": row.id}
+
+
+def _set_provider_state(session: Session, row_id: int, state: str, error: Optional[str] = None) -> None:
+    row = session.get(ProviderEventRow, row_id, with_for_update=True)
+    if row is None:
+        return
+    row.state, row.last_error = state, error
+    if state == "PROCESSED":
+        row.processed_at = _now()
+    session.commit()
+
+
+def _apply_provider_row(session: Session, row_id: int) -> dict:
+    """Phase B: apply one durable row. Locks the event and the cycle, commits atomically."""
+    event_row = session.get(ProviderEventRow, row_id, with_for_update=True)
+    if event_row is None:
+        raise NotFound("provider event not found")
+    if event_row.state == "PROCESSED":
+        return {"duplicate": True, "provider_txn_id": event_row.provider_txn_id}
+    p = event_row.raw
+    if TxnKind(event_row.kind) == TxnKind.PAYOUT:
+        result = _apply_payout_event(session, p, event_row)
+    else:
+        result = _apply_payment_event(session, p, TxnKind(event_row.kind), event_row)
+    _set_provider_state(session, row_id, "PROCESSED")
+    return result
+
+
+def receive_provider_event(session: Session, p: dict, raw_body: str, signature_ok: bool) -> dict:
+    """Durable receive: persist first, apply second, never lose the event.
+
+    A permanent validation error is recorded as REJECTED and re-raised (4xx to the provider, and the
+    worker will not touch it again). Anything else is parked for retry and re-raised, so the caller
+    still sees the failure while the row waits for the worker.
+    """
+    ingested = _ingest_provider_event(session, p, raw_body, signature_ok)
+    if ingested["duplicate"]:
+        return ingested
     try:
-        if kind == TxnKind.PAYOUT:
-            result = _apply_payout_event(session, p)
-        else:
-            result = _apply_payment_event(session, p, kind)
-        session.commit()
-        return result
-    except IntegrityError:
+        return {"duplicate": False, **_apply_provider_row(session, ingested["id"])}
+    except ServiceError as exc:
         session.rollback()
-        return {"duplicate": True, "provider_txn_id": txn_id}
+        _set_provider_state(session, ingested["id"],
+                            "REJECTED" if isinstance(exc, Unprocessable) else "PARKED",
+                            f"{exc.code}: {exc.detail}")
+        raise
+    except Exception as exc:                            # noqa: BLE001 - parked, logged, retried by the worker
+        session.rollback()
+        _set_provider_state(session, ingested["id"], "PARKED", str(exc))
+        raise
 
 
-def _apply_payment_event(session: Session, p: dict, kind: TxnKind) -> dict:
+def apply_provider_event(session: Session, p: dict, raw_body: str = "",
+                         signature_ok: bool = True) -> dict:
+    """Backwards-compatible entry point: ingest + apply in one call."""
+    return receive_provider_event(session, p, raw_body, signature_ok)
+
+
+def process_pending_provider_events(session: Session, limit: int = 100) -> dict:
+    """Worker step: re-apply anything RECEIVED or PARKED below the attempt ceiling.
+
+    This is what makes a crash harmless — the event is already on disk, so the next pass finishes it.
+    """
+    rows = []
+    now = _now()
+    pending = (ProviderEventRow.state.in_(["RECEIVED", "PARKED"]) &
+               (ProviderEventRow.attempts < PROVIDER_MAX_ATTEMPTS))
+    # backoff is per-row (the payload carries no job to update), so the eligible window is computed here
+    for row in session.scalars(select(ProviderEventRow).where(pending).order_by(ProviderEventRow.id).limit(limit)):
+        if row.attempts:                                # an untried event is eligible immediately
+            due_from = row.last_attempt_at or row.received_at
+            if as_utc(due_from) + timedelta(seconds=provider_backoff(row.attempts)) > now:
+                continue
+        rows.append(row)
+    applied, failed = [], []
+    for row in rows:
+        row_id = row.id
+        try:
+            applied.append({"id": row_id, **_apply_provider_row(session, row_id)})
+        except Exception as exc:                        # noqa: BLE001 - a parked row must not stop the pass
+            # _apply_provider_row mutated the row in place before failing, so discard it and re-read
+            session.rollback()
+            fresh = session.get(ProviderEventRow, row_id, with_for_update=True)
+            attempts = (fresh.attempts or 0) + 1
+            fresh.attempts, fresh.last_attempt_at = attempts, _now()
+            state = "DEAD" if attempts >= PROVIDER_MAX_ATTEMPTS else "PARKED"
+            _set_provider_state(session, row_id, state, str(exc))
+            error_code = getattr(exc, "code", "UNKNOWN_ERROR")
+            failed.append({"id": row_id, "attempts": attempts, "state": state, "error": str(exc), "code": error_code})
+    return {"scanned": len(rows), "applied": applied, "failed": failed}
+
+
+def _apply_payment_event(session: Session, p: dict, kind: TxnKind, event_row: ProviderEventRow) -> dict:
     cycle = _cycle(session, p["cycle_id"], lock=True)
     if S(cycle.state) == S.DRAFT:
         raise Conflict("cycle has not been opened")
@@ -346,9 +464,9 @@ def _apply_payment_event(session: Session, p: dict, kind: TxnKind) -> dict:
         raise Conflict("cycle is finalized; only refunds are accepted")
     amt = Money(p["amount"], p["currency"])
     status = p["status"]
-    session.add(ProviderEventRow(provider_txn_id=p["provider_txn_id"], kind=kind.value, status=status,
-                                 cycle_id=cycle.id, member_id=ob.member_id, amount=amt.minor,
-                                 currency=amt.currency, raw=p))
+    # the ingest row already exists; it is enriched with what phase B resolved
+    event_row.cycle_id, event_row.member_id, event_row.status = cycle.id, ob.member_id, status
+    event_row.amount, event_row.currency = amt.minor, amt.currency
     common = dict(circle_id=cycle.circle_id, cycle_id=cycle.id, member_id=ob.member_id, amount=amt,
                   actor="provider", ruleset_version=rules.version, provider_ref=p["provider_txn_id"],
                   idempotency_key=f"provider:{p['provider_txn_id']}")
@@ -648,7 +766,8 @@ def execute_payout(session: Session, settlement_id: str, actor_id: str, gateway:
     elif state != S.PAYOUT_PENDING:
         raise Conflict(f"settlement cannot be paid out from state {state.value}")
     result = gateway.submit_payout(idempotency_key=row.payout_idempotency_key,
-                                   member_id=s.winner_member_id, amount=s.winner_payout)
+                                   member_id=s.winner_member_id, amount=s.winner_payout,
+                                   session=session)
     return _apply_gateway_result(session, row, cycle, result, actor_id)
 
 
@@ -682,7 +801,7 @@ def check_payout(session: Session, settlement_id: str, actor_id: str, gateway: P
     return _apply_gateway_result(session, row, cycle, gateway.lookup_payout(row.payout_idempotency_key), actor_id)
 
 
-def _apply_payout_event(session: Session, p: dict) -> dict:
+def _apply_payout_event(session: Session, p: dict, event_row: ProviderEventRow) -> dict:
     row = session.scalar(select(SettlementRow).where(SettlementRow.payout_idempotency_key == p.get("payout_reference")))
     if row is None:
         raise NotFound("no settlement matches that payout reference")
@@ -693,9 +812,8 @@ def _apply_payout_event(session: Session, p: dict) -> dict:
     # a COMPLETED callback with the wrong amount is stored as MISMATCH: it holds the cycle for human review
     # and is never counted as the confirmed payout
     stored_status = "MISMATCH" if (p["status"] == "COMPLETED" and not matches) else p["status"]
-    session.add(ProviderEventRow(provider_txn_id=p["provider_txn_id"], kind="PAYOUT", status=stored_status,
-                                 cycle_id=cycle.id, member_id=s.winner_member_id, settlement_id=row.id,
-                                 amount=amt.minor, currency=amt.currency, raw=p))
+    event_row.cycle_id, event_row.member_id, event_row.settlement_id = cycle.id, s.winner_member_id, row.id
+    event_row.status, event_row.amount, event_row.currency = stored_status, amt.minor, amt.currency
     if S(cycle.state) not in (S.PAYOUT_PENDING, S.PAYOUT_SUBMITTED):
         session.flush()
         return {"duplicate": False, "applied": "RECORDED_ONLY", "cycle_state": cycle.state}
@@ -736,7 +854,8 @@ def _reconcile(session: Session, row: SettlementRow, cycle: Cycle, s: Settlement
             problems.append({"code": "LEDGER_OBLIGATION_MISMATCH", "member_id": o.member_id})
     internal = {o.member_id: Money(ledger_paid.get(o.member_id, 0), cur) for o in obs}
     provider = [ProviderTxn(p.provider_txn_id, TxnKind(p.kind), p.status, Money(p.amount, p.currency), p.member_id)
-                for p in session.scalars(select(ProviderEventRow).where(ProviderEventRow.cycle_id == cycle.id))]
+                for p in session.scalars(select(ProviderEventRow).where(ProviderEventRow.cycle_id == cycle.id,
+                                                                        ProviderEventRow.state == "PROCESSED"))]
     pay_rep = reconcile_payments(internal, provider, s.net_contributions)
     payout_txn = next((t for t in provider if t.kind == TxnKind.PAYOUT and t.status == "COMPLETED"), None)
     out_rep = reconcile_payout(s.winner_payout, payout_txn)
@@ -793,13 +912,32 @@ def reconciliation_report(session: Session, settlement_id: str) -> dict:
 
 
 # ---------------------------------------------------------------- ledger, corrections, disputes
-def list_ledger(session: Session, cycle_id: str) -> list:
-    rows = session.scalars(select(LedgerEventRow).where(LedgerEventRow.cycle_id == cycle_id)
-                           .order_by(LedgerEventRow.timestamp, LedgerEventRow.id))
-    return [{"id": e.id, "type": e.event_type, "member_id": e.member_id, "amount": e.amount, "currency": e.currency,
-             "timestamp": as_utc(e.timestamp).isoformat(), "actor": e.actor, "ruleset_version": e.ruleset_version,
-             "settlement_id": e.settlement_id, "provider_ref": e.provider_ref, "reverses": e.reverses_event_id,
-             "reason": e.reason, "journal": e.journal} for e in rows]
+def list_ledger(session: Session, cycle_id: str, cursor: Optional[str] = None, limit: Optional[int] = 50) -> dict:
+    """Cursor-paginated ledger listing. Never uses OFFSET; pages by (timestamp, id) tuple."""
+    q = select(LedgerEventRow).where(LedgerEventRow.cycle_id == cycle_id)
+    if cursor:
+        ts_str, id_str = cursor.split("|", 1)
+        cursor_ts = datetime.fromisoformat(ts_str)
+        q = q.where(
+            (LedgerEventRow.timestamp > cursor_ts) |
+            ((LedgerEventRow.timestamp == cursor_ts) & (LedgerEventRow.id > id_str))
+        )
+    q = q.order_by(LedgerEventRow.timestamp, LedgerEventRow.id)
+    if limit is not None:
+        q = q.limit(limit + 1)  # fetch one extra to detect a next page
+    rows = list(session.scalars(q))
+    has_more = len(rows) > (limit if limit is not None else len(rows))
+    if has_more:
+        rows = rows[:limit]
+    next_cursor = f"{as_utc(rows[-1].timestamp).isoformat()}|{rows[-1].id}" if rows else None
+    return {
+        "items": [{"id": e.id, "type": e.event_type, "member_id": e.member_id, "amount": e.amount, "currency": e.currency,
+                   "timestamp": as_utc(e.timestamp).isoformat(), "actor": e.actor, "ruleset_version": e.ruleset_version,
+                   "settlement_id": e.settlement_id, "provider_ref": e.provider_ref, "reverses": e.reverses_event_id,
+                   "reason": e.reason, "journal": e.journal} for e in rows],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
 
 def reverse_event(session: Session, event_id: str, actor_id: str, reason: str) -> dict:
@@ -895,3 +1033,221 @@ def member_risk(session: Session, circle_id: str, member_id: str) -> dict:
     return {"member_id": member_id, "indicator": ra.indicator.value, "points": ra.points, "factors": list(ra.factors),
             "required_security_level": ra.required_security_level, "organizer_alert": ra.organizer_alert,
             "review_recommendation": ra.review_recommendation, "disclaimer": ra.disclaimer}
+
+
+# ---------------------------------------------------------------- agent mandates (§13, adr/0007)
+#
+# The agent may only *propose*. A human approves with step-up, which issues a single-use,
+# hash-locked mandate. `execute_mandate` takes the id alone, re-reads everything from the DB,
+# verifies hash/expiry/unused/proposal state, recomputes the amount with the engine, takes the
+# cycle lock, then calls the gateway outside the transaction. Nothing about the action can drift
+# after approval.
+
+def _canonical_params(params: dict) -> str:
+    """Deterministic JSON serialization for hash-locking mandate parameters."""
+    return json.dumps(params, sort_keys=True, separators=(",", ":"))
+
+
+def _params_hash(params: dict) -> str:
+    return hashlib.sha256(_canonical_params(params).encode()).hexdigest()
+
+
+def _feature_flag(session: Session, key: str) -> bool:
+    """Resolve a feature flag: DB row wins; absent → env-configured default."""
+    row = session.get(FeatureFlag, key)
+    if row is not None:
+        return bool(row.value)
+    default = {"AGENT_PROPOSAL_ENABLED": True, "AGENT_EXECUTION_ENABLED": True}.get(key, False)
+    return bool(default)
+
+
+def _require_proposal_params(params: dict) -> None:
+    """Validate that proposal params contain the minimum fields every action needs."""
+    required = {"kind", "member_id", "amount_minor", "currency", "cycle_id"}
+    missing = required - set(params.keys())
+    if missing:
+        raise Unprocessable(f"proposal params missing: {', '.join(sorted(missing))}")
+    if not isinstance(params["amount_minor"], int) or isinstance(params["amount_minor"], bool):
+        raise Unprocessable("amount_minor must be an integer number of minor units")
+    if params["amount_minor"] <= 0:
+        raise Unprocessable("amount_minor must be positive")
+
+
+def create_proposal(session: Session, circle_id: str, actor_id: str, kind: str,
+                    params: dict, rationale: Optional[str],
+                    expires_in_minutes: int = 60) -> dict:
+    """Agent proposes an action. Returns the proposal id; nothing can execute yet.
+
+    The agent supplies exact structured parameters. Deterministic code validates them; the
+    LLM never supplies execution parameters at execute time.
+    """
+    if not _feature_flag(session, "AGENT_PROPOSAL_ENABLED"):
+        raise Forbidden("agent proposals are disabled by feature flag")
+    _circle(session, circle_id)
+    _require_proposal_params(params)
+    params["kind"] = kind
+    proposal = ProposedActionRow(
+        id=str(uuid.uuid4()), circle_id=circle_id, kind=kind, params=params,
+        rationale=rationale, state="PROPOSED", proposed_by=actor_id, created_at=_now())
+    session.add(proposal)
+    session.flush()
+    return {"proposal_id": proposal.id, "state": "PROPOSED",
+            "expires_at": (_now() + timedelta(minutes=expires_in_minutes)).isoformat()}
+
+
+def approve_proposal(session: Session, proposal_id: str, actor_id: str,
+                     step_up_method: str, step_up_evidence: Optional[dict],
+                     cap_minor: Optional[int] = None) -> dict:
+    """Human approves a proposal with step-up auth. Issues a single-use, hash-locked mandate.
+
+    The approval screen must show the exact amount and recipient in plain language. The mandate
+    locks the params, a hard cap, currency, circle, cycle, recipient, action kind and a short
+    expiry. Only an ISSUED mandate can execute, and only once.
+    """
+    if not _feature_flag(session, "AGENT_PROPOSAL_ENABLED"):
+        raise Forbidden("agent proposals are disabled by feature flag")
+    proposal = session.get(ProposedActionRow, proposal_id)
+    if proposal is None:
+        raise NotFound("proposal not found")
+    if proposal.state != "PROPOSED":
+        raise Conflict(f"proposal is already {proposal.state}")
+    params = dict(proposal.params)
+    amount_minor = params["amount_minor"]
+    cap = cap_minor if cap_minor is not None else amount_minor
+    if cap < amount_minor:
+        raise Unprocessable("cap must be at least the proposed amount")
+    # Tier 2 (§13.4): the payout recipient can never approve their own payout.
+    if params.get("kind") == "payout":
+        member = session.get(Member, params["member_id"])
+        if member is not None and member.id == actor_id:
+            raise Forbidden("the payout recipient cannot approve their own payout")
+    mandate_id = str(uuid.uuid4())
+    idempotency_key = f"mandate:{mandate_id}"
+    mandate = AgentMandate(
+        id=mandate_id, proposal_id=proposal.id, circle_id=proposal.circle_id,
+        kind=proposal.kind, params=params, params_hash=_params_hash(params),
+        cap_minor=cap, currency=params["currency"],
+        expires_at=_now() + timedelta(minutes=30),   # short expiry per §13.1
+        state="MANDATE_ISSUED", issued_by=actor_id,
+        step_up={"method": step_up_method, "evidence": step_up_evidence or {}},
+        idempotency_key=idempotency_key)
+    session.add(mandate)
+    proposal.state = "APPROVED"
+    proposal.decided_by = actor_id
+    proposal.decided_at = _now()
+    session.flush()
+    return {"mandate_id": mandate.id, "idempotency_key": idempotency_key,
+            "expires_at": mandate.expires_at.isoformat(), "state": "MANDATE_ISSUED"}
+
+
+def execute_mandate(session: Session, mandate_id: str, actor_id: str,
+                    gateway: PayoutGateway) -> dict:
+    """Execute a mandate. Takes the id alone — the LLM supplies no execution parameters.
+
+    Re-reads params from the DB, verifies hash/expiry/unused/proposal state, recomputes the
+    amount with the engine, takes the cycle lock, then calls the gateway outside the transaction
+    with idempotency key `mandate:{id}`. Any mismatch aborts with no gateway call.
+    """
+    if not _feature_flag(session, "AGENT_EXECUTION_ENABLED"):
+        raise Forbidden("agent execution is disabled by feature flag")
+    mandate = session.get(AgentMandate, mandate_id, with_for_update=True)
+    if mandate is None:
+        raise NotFound("mandate not found")
+    if mandate.state != "MANDATE_ISSUED":
+        raise Conflict(f"mandate is {mandate.state}, not executable")
+    if _now() > as_utc(mandate.expires_at):
+        mandate.state = "EXPIRED"
+        session.commit()
+        raise Conflict("mandate has expired")
+    # Re-verify the params hash — any tampering aborts before any provider call.
+    if mandate.params_hash != _params_hash(mandate.params):
+        mandate.state = "FAILED"
+        mandate.outcome = {"error": "params_hash_mismatch"}
+        session.commit()
+        raise Conflict("mandate parameters have been tampered with")
+    params = mandate.params
+    amount_minor = params["amount_minor"]
+    if amount_minor > mandate.cap_minor:
+        mandate.state = "FAILED"
+        mandate.outcome = {"error": "cap_exceeded"}
+        session.commit()
+        raise Conflict("proposed amount exceeds mandate cap")
+    # Take the cycle lock (fixed lock order: circle → cycle → settlement).
+    cycle_id = params.get("cycle_id")
+    if cycle_id:
+        _cycle(session, cycle_id, lock=True)
+    # For payouts, recompute the amount from the stored settlement (engine, never the model).
+    settlement_id = params.get("settlement_id")
+    if settlement_id and mandate.kind == "payout":
+        row = _settlement(session, settlement_id, lock=True)
+        s, rules = _stored(row)
+        expected = s.winner_payout
+        if expected.minor != amount_minor or expected.currency != mandate.currency:
+            mandate.state = "FAILED"
+            mandate.outcome = {"error": "amount_recompute_mismatch"}
+            session.commit()
+            raise Conflict("engine recomputed amount does not match mandate params")
+    # Persist intent (single-use consumed) before calling the provider, so a retry cannot
+    # double-submit. The provider call itself happens outside the transaction.
+    mandate.state = "CONSUMED"
+    session.commit()
+    try:
+        if mandate.kind == "payout":
+            result = gateway.submit_payout(
+                idempotency_key=mandate.idempotency_key,
+                member_id=params["member_id"],
+                amount=Money(amount_minor, mandate.currency),
+                session=session,
+            )
+        else:
+            raise Unprocessable(f"unsupported mandate kind: {mandate.kind}")
+    except Exception as exc:  # noqa: BLE001 - one failed execution must not poison the mandate
+        mandate.state = "FAILED"
+        mandate.outcome = {"error": f"{type(exc).__name__}: {exc}"}
+        session.commit()
+        raise
+    mandate.state = "EXECUTED"
+    mandate.executed_at = _now()
+    mandate.executed_by = actor_id
+    mandate.outcome = {"provider_ref": result.provider_ref, "status": result.status.value}
+    session.commit()
+    return {"outcome": mandate.outcome, "mandate_id": mandate.id}
+
+
+def revoke_mandate(session: Session, mandate_id: str, actor_id: str, reason: Optional[str]) -> dict:
+    """Revoke an unused mandate. Only ISSUED mandates can be revoked."""
+    mandate = session.get(AgentMandate, mandate_id, with_for_update=True)
+    if mandate is None:
+        raise NotFound("mandate not found")
+    if mandate.state != "MANDATE_ISSUED":
+        raise Conflict(f"mandate is {mandate.state}, cannot revoke")
+    mandate.state = "REVOKED"
+    mandate.outcome = {"revoked_by": actor_id, "reason": reason or "", "revoked_at": _now().isoformat()}
+    session.commit()
+    return {"mandate_id": mandate.id, "state": "REVOKED"}
+
+
+def list_proposals(session: Session, circle_id: str) -> list:
+    """List proposed actions for a circle (agent proposal queue)."""
+    _circle(session, circle_id)
+    rows = list(session.scalars(select(ProposedActionRow)
+                                .where(ProposedActionRow.circle_id == circle_id)
+                                .order_by(ProposedActionRow.created_at.desc())))
+    return [{"id": r.id, "kind": r.kind, "params": r.params, "rationale": r.rationale,
+             "state": r.state, "proposed_by": r.proposed_by,
+             "decided_by": r.decided_by, "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+             "created_at": r.created_at.isoformat()} for r in rows]
+
+
+def list_mandates(session: Session, circle_id: str) -> list:
+    """List mandates for a circle (audit trail)."""
+    _circle(session, circle_id)
+    rows = list(session.scalars(select(AgentMandate)
+                                .where(AgentMandate.circle_id == circle_id)
+                                .order_by(AgentMandate.created_at.desc())))
+    return [{"id": r.id, "proposal_id": r.proposal_id, "kind": r.kind, "params": r.params,
+             "params_hash": r.params_hash, "cap_minor": r.cap_minor, "currency": r.currency,
+             "expires_at": r.expires_at.isoformat(), "state": r.state, "issued_by": r.issued_by,
+             "step_up": r.step_up, "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+             "executed_by": r.executed_by, "outcome": r.outcome,
+             "created_at": r.created_at.isoformat()} for r in rows]
