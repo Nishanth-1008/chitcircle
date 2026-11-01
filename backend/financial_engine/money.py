@@ -164,6 +164,21 @@ class Money:
     def to_major(self) -> Decimal:
         return Decimal(self.minor) / (Decimal(10) ** CURRENCY_EXPONENTS[self.currency])
 
+    def to_major_string(self) -> str:
+        """Exact minor-unit → major-unit string for provider payloads.
+
+        Integer arithmetic only, scaled by ``CURRENCY_EXPONENTS``: ``12345`` USD → ``"123.45"``,
+        ``500`` JPY → ``"500"``, ``1234`` KWD → ``"1.234"``. This is the *only* sanctioned way to
+        build an amount string for PayPal — ``f"{minor / 100:.2f}"`` is float division with a
+        hard-coded exponent and is wrong for JPY/KWD (gap #9).
+        """
+        exp = CURRENCY_EXPONENTS[self.currency]
+        sign = "-" if self.minor < 0 else ""
+        whole, frac = divmod(abs(self.minor), 10 ** exp)
+        if exp == 0:
+            return f"{sign}{whole}"
+        return f"{sign}{whole}.{frac:0{exp}d}"
+
     def format(self) -> str:
         exp = CURRENCY_EXPONENTS[self.currency]
         sign = "-" if self.minor < 0 else ""

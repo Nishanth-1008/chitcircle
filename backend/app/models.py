@@ -1,9 +1,13 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
+from cryptography.fernet import Fernet
 from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text,
-                        UniqueConstraint, event)
+                        TypeDecorator, UniqueConstraint, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from .config import encryption_key
 
 
 def _id() -> str:
@@ -12,6 +16,36 @@ def _id() -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class EncryptedString(TypeDecorator):
+    """AES-256 (Fernet) encrypted text column. Plaintext never hits disk.
+
+    The ciphertext is stored as a base64 string in a plain VARCHAR column, so no
+    migration is needed when switching a column to this type — the DB column type
+    stays the same and the encryption happens entirely in the application layer.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        key = encryption_key()
+        if not key:
+            raise RuntimeError("ENCRYPTION_KEY is required to write encrypted fields")
+        fernet = Fernet(key)
+        return fernet.encrypt(value.encode("utf-8")).decode("ascii")
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        key = encryption_key()
+        if not key:
+            raise RuntimeError("ENCRYPTION_KEY is required to read encrypted fields")
+        fernet = Fernet(key)
+        return fernet.decrypt(value.encode("ascii")).decode("utf-8")
 
 
 class Base(DeclarativeBase):
@@ -181,18 +215,39 @@ def _ledger_is_append_only(mapper, connection, target):
 
 
 class ProviderEventRow(Base):
+    """Two-phase provider ingest: the callback is durable before anything is applied.
+
+    Phase A (ingest) writes the raw body and marks the row RECEIVED. Phase B (apply) locks the row,
+    applies it to the cycle/ledger under the cycle lock and marks it PROCESSED. A failure parks the
+    row for the worker to retry; a permanent validation error marks it REJECTED. A crash between the
+    two phases loses nothing: the row is already on disk.
+    """
     __tablename__ = "provider_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    provider_txn_id: Mapped[str] = mapped_column(String(100), unique=True)       # duplicate callbacks ignored
+    provider: Mapped[str] = mapped_column(String(20), default="paypal")
+    provider_event_id: Mapped[str] = mapped_column(String(120))                   # ingress dedupe key
+    provider_txn_id: Mapped[str] = mapped_column(String(100), index=True)         # business idempotency key
     kind: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(20), default="RECEIVED", index=True)  # RECEIVED|PROCESSED|PARKED|REJECTED|DEAD
     cycle_id: Mapped[str] = mapped_column(String(36), nullable=True, index=True)
     member_id: Mapped[str] = mapped_column(String(36), nullable=True)
     settlement_id: Mapped[str] = mapped_column(String(36), nullable=True)
-    amount: Mapped[int] = mapped_column(BigInteger)
-    currency: Mapped[str] = mapped_column(String(3))
+    # phase B (apply) fills these in once the cycle/obligation is resolved; NULL means "not yet applied"
+    amount: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(3), nullable=True)
     raw: Mapped[dict] = mapped_column(JSON)
+    raw_body: Mapped[str] = mapped_column(Text)                                   # exactly as received, for replay
+    signature_ok: Mapped[bool] = mapped_column(Boolean, default=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(Text, nullable=True)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_event_id", name="uq_provider_event"),
+    )
 
 
 class OutboxRow(Base):
@@ -209,6 +264,72 @@ class OutboxRow(Base):
     __table_args__ = (
         Index("ix_outbox_unpublished", "id"),
     )
+
+
+class Job(Base):
+    """Durable work queue: the outbox relay publishes here, and the scheduler enqueues here.
+
+    Claiming is atomic (`SELECT ... FOR UPDATE SKIP LOCKED` on Postgres), so one worker owns a job.
+    A claimed job carries `locked_until`: if the worker dies mid-run the job becomes claimable again
+    after the visibility timeout, and `attempts` drives exponential backoff into a DEAD letter.
+    """
+    __tablename__ = "jobs"
+    # Integer, not BigInteger: SQLite only autoincrements `INTEGER PRIMARY KEY`, and the queue must
+    # work identically on the dev/test SQLite backend and on Postgres.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    type: Mapped[str] = mapped_column(String(80), index=True)
+    circle_id: Mapped[str] = mapped_column(String(36), nullable=True, index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)  # PENDING|RUNNING|DONE|DEAD
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(Text, nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=True)
+    locked_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class FeatureFlag(Base):
+    """Operational kill switches (§13.4 / §16.6).
+
+    Values are stored lower-case strings: "true" or "false". Absent row means the configured
+    default in `app.config` applies, so an instance can boot with the flag hard-off via env.
+    """
+    __tablename__ = "feature_flags"
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[bool] = mapped_column(Boolean)
+    reason: Mapped[str] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str] = mapped_column(String(100), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AgentMandate(Base):
+    """A single-use, hash-locked permission to execute an already-approved proposed action.
+
+    The agent may only *propose*. A human approves, then the approval issues this mandate bound to
+    the exact parameters that were shown to them. `execute_mandate` takes the id alone and re-reads
+    everything from here: it recomputes the params hash, re-validates caps and the kill switch, and
+    refuses if the row is not MANDATE_ISSUED. Nothing about the action can drift after approval.
+    """
+    __tablename__ = "agent_mandates"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    proposal_id: Mapped[str] = mapped_column(ForeignKey("proposed_actions.id"), unique=True)
+    circle_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(50))
+    params: Mapped[dict] = mapped_column(JSON)                                    # frozen copy shown to the approver
+    params_hash: Mapped[str] = mapped_column(String(64), index=True)              # sha256 of the canonical params
+    cap_minor: Mapped[int] = mapped_column(BigInteger)                            # inclusive ceiling at execution time
+    currency: Mapped[str] = mapped_column(String(3))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    state: Mapped[str] = mapped_column(String(30), default="MANDATE_ISSUED", index=True)
+    issued_by: Mapped[str] = mapped_column(String(100))
+    step_up: Mapped[dict] = mapped_column(JSON, nullable=True)                    # how the human proved presence
+    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    executed_by: Mapped[str] = mapped_column(String(100), nullable=True)
+    outcome: Mapped[dict] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class ApiIdempotencyRow(Base):
@@ -234,4 +355,18 @@ class ProposedActionRow(Base):
     proposed_by: Mapped[str] = mapped_column(String(50))
     decided_by: Mapped[str] = mapped_column(String(36), nullable=True)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class UserContact(Base):
+    """Encrypted contact info for a user. PII lives here, not in the ledger.
+
+    The payments adapter resolves a member's verified contact at the edge
+    instead of using placeholder addresses (§10.10, gap #10).
+    """
+    __tablename__ = "user_contacts"
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)   # "email" | "phone"
+    value: Mapped[str] = mapped_column(EncryptedString(255), nullable=False)  # contact value (encrypted at rest)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
