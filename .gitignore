@@ -22,6 +22,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Database and build artifacts
+*.db
+*.zip
+!chitcircle-docs.zip
+
 # Virtualenv
 venv/
 .venv/

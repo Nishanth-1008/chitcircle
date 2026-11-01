@@ -24,7 +24,7 @@ from ..services.gateway import (
 )
 from ..auth import (
     create_access_token, get_current_user, get_current_organizer, get_current_actor,
-    create_user, hash_password, verify_password
+    create_user, hash_password, verify_password, decode_token
 )
 
 router = APIRouter()
