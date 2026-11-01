@@ -26,6 +26,17 @@ Update this file as decisions are made. Each item lists an owner and when it mus
 | 13 | Is PayPal still cross-border only in India? Confirm current status and any change | Phase 0 |
 | 14 | Which domestic rail for India (UPI aggregator), and what onboarding does it need? | Phase 5 (start talks in Phase 2) |
 
+## Agents and mandates
+
+| # | Question | Needed by |
+|---|---|---|
+| 29 | Cap values: per-action cap and per-circle daily cap (expressed in minor units per currency) | Phase 1 |
+| 30 | Mandate expiry (minutes from approval), and whether it differs by risk tier | Phase 1 |
+| 31 | Second-approver thresholds: which actions require a second approver beyond Tier 2 payouts | Phase 2 |
+| 32 | Which PayPal calls the agent may use in the sandbox (**validate in the sandbox**; do not assume) | Phase 1 |
+| 33 | Default step-up method (biometric vs OTP), and cooldown length after a payout-destination change | Phase 2 |
+| 34 | Whether the LLM is exposed to PayPal MCP tools at all, or only to `execute_mandate` (proxy required either way) | Phase 1 |
+
 ## Legal and compliance
 
 | # | Question | Needed by |

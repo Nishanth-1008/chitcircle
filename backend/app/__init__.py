@@ -17,6 +17,10 @@ from .models import (
     OutboxRow,
     ApiIdempotencyRow,
     ProposedActionRow,
+    AgentMandate,
+    Job,
+    FeatureFlag,
+    UserContact,
 )
 
 __all__ = [
@@ -36,4 +40,8 @@ __all__ = [
     "OutboxRow",
     "ApiIdempotencyRow",
     "ProposedActionRow",
+    "AgentMandate",
+    "Job",
+    "FeatureFlag",
+    "UserContact",
 ]

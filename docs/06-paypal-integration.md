@@ -39,6 +39,17 @@ class PayoutGateway(Protocol):          # exists in the prototype
 
 Adapters: `PayPalGateway`, `MockGateway` (tests and simulator), and later a domestic-rail adapter. The service layer depends only on the protocols.
 
+### 3.1 Mandate-bound gateway calls (agent execution)
+
+When an agent executes an approved action (see `10-ai-agents.md` and `adr/0007`), the gateway call is bound to a single-use mandate:
+
+1. The restricted execution worker loads the mandate and re-reads its parameters from the database, verifying the parameter hash, expiry, unused `ISSUED` state and the proposal state.
+2. Deterministic code recomputes the amount with the engine (never from the model), checks the hard amount cap, and **aborts on any mismatch**.
+3. The cycle lock is taken and the intent is recorded; then the gateway is called **outside the transaction**, carrying idempotency key `mandate:{id}`.
+4. `UNKNOWN` outcomes use the existing checker flow; reconciliation and the immutable audit log apply unchanged.
+
+This is an ordinary `PayoutGateway` / `CollectionGateway` call: the provider cannot tell an agent call from an organizer call, and PayPal's acceptable use policy applies **equally** to agent-initiated and human-initiated calls (**VERIFY** current wording). The LLM never holds provider credentials and never receives raw provider tools; if PayPal MCP tools are exposed, they sit behind a proxy that permits only mandated calls (`adr/0007`).
+
 ## 4. PayPal capability mapping (sandbox first)
 
 The PayPal AI Toolkit exposes a sandbox MCP server with tools for orders and payments, invoices, subscriptions, disputes, catalog, shipments and reporting. A dedicated payout tool was not visible in the tool list.

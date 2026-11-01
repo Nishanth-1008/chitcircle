@@ -15,6 +15,7 @@
 - Next.js organizer dashboard with the Bryntum timeline
 - Auction flow in the UI (polling), settlement view, approve and payout
 - Collections agent with escalation and one-tap proposed actions
+- **Mandate-gated execution: agent proposes, human approves (step-up), agent executes via PayPal sandbox** (see `adr/0007`)
 - Deployed on Render; Postman collection; demo video; write-up
 
 **Should have**
@@ -32,6 +33,7 @@
 - [ ] `PayPalGateway` (collection plus payout or fallback); token cache and refresh
 - [ ] Webhook receiver with real verification; `provider_events`; worker processing; `ledger_seq`
 - [ ] Outbox table and simple relay loop
+- [ ] `proposed_actions` + `agent_mandates` tables; `execute_mandate(mandate_id)` tool (hash, expiry, single-use, engine amount recompute, cycle lock, key `mandate:{id}`); caps, velocity limits and kill switch
 - [ ] Presets, seed script, and simulator (golden-run seeds)
 - [ ] Minimal JWT auth replacing header stub for the demo path
 - [ ] `GET /circles/{id}/timeline` and `/dashboard` read models (direct SQL is fine for now, cache later)
@@ -43,6 +45,7 @@
 - [ ] Member view: my payments, bid screen, settlement breakdown
 - [ ] Auction open, bid, close in the UI; polling every 3 s
 - [ ] Proposed-actions table and approval queue UI
+- [ ] Approval UI with step-up (biometric/OTP) showing exact amount and recipient; mandate issued on approve; **agent executes**: collections agent creates the catch-up invoice through PayPal, payout executed after settlement approval plus second approver
 - [ ] Collections agent: deterministic schedule, templated message with model-personalized line, reminder through Zapier
 - [ ] Explainer and bid advisor if time allows
 - [ ] Early-payout screen with effective annualized rate
@@ -59,9 +62,9 @@
 1. A circle is created from a preset; members join.
 2. The simulator fast-forwards; the Bryntum timeline fills with paid, late and pending cells.
 3. An auction runs; the settlement shows exact dividend math.
-4. A member misses a payment; the agent reminds, proposes a catch-up invoice; the organizer approves in one tap.
+4. A member misses a payment; the agent reminds and proposes a catch-up invoice with the exact amount; the organizer approves in one tap (step-up), which issues a single-use mandate; the agent executes it and creates the invoice through PayPal; the member pays, the webhook lands in the ledger, and the agent confirms the outcome.
 5. An agreed-discount early payout shows the effective rate.
-6. Payout executes through PayPal sandbox; ledger and reconciliation show clean.
+6. The settlement is approved (step-up plus a second approver); the payout executor executes through its mandate on the PayPal sandbox; ledger and reconciliation show clean.
 7. Close: "From about 40 manual tasks to 3 approvals."
 
 ## Cut list (drop in this order if behind)
@@ -72,7 +75,7 @@
 4. Zapier channel (show a simulated message log)
 5. Tiered visibility variants (keep organizer and group views)
 
-Never cut: real PayPal sandbox collection, verified webhook, ledger integrity, and the timeline.
+Never cut: real PayPal sandbox collection, verified webhook, ledger integrity, the timeline, and mandate-gated agent execution (propose → human approves → agent executes through PayPal).
 
 ## Exit criteria
 

@@ -21,3 +21,18 @@ Funds move between members and the organizer's own payment account. ChitCircle c
 
 ## Revisit when
 A licensed partner offers pooled accounts as a service, or the company obtains the required licences.
+
+## Clarification: custody is about funds, not about who calls the API
+
+Non-custodial refers to **where money sits and whose account it is in**, not to *what triggers* an
+integration call. ChitCircle holds no pooled balance either way: funds still move between members and the
+organizer's own payment account.
+
+An agent that executes an **approval-gated, mandate-bound** call against the organizer's own account (see
+`adr/0007`) does not create custody. Nothing is held by the platform; no new account is opened; the ledger
+still mirrors and reconciles provider movements rather than being the bank.
+
+PayPal's acceptable use policy applies **equally** to agent-initiated and human-initiated calls
+(**VERIFY** current wording). The distinction that matters for policy is the use case (chit-style savings
+groups, pooled or escrow-like behaviour, prize draws), not whether a human or an approved agent pressed the
+button.

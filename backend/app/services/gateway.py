@@ -12,6 +12,8 @@ from typing import Optional, Protocol
 import httpx
 from jose import jwt
 from jose.utils import base64url_decode
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from financial_engine.money import Money
 
@@ -23,6 +25,7 @@ from ..config import (
     webhook_secret,
     redis_url,
 )
+from ..models import UserContact
 
 
 class PayoutStatus(str, Enum):
@@ -67,6 +70,23 @@ class CollectionGateway(Protocol):
     ) -> CollectionResult: ...
 
 
+def resolve_contact_email(session: Session, member_id: str) -> Optional[str]:
+    """Resolve a member's verified contact email from ``user_contacts``.
+
+    PII stays out of the engine; the payments adapter resolves the verified
+    contact at the edge (§10.10, gap #10). Returns None when no verified
+    email contact exists for the member, so callers can fall back.
+    """
+    contact = session.scalar(
+        select(UserContact).where(
+            UserContact.user_id == member_id,
+            UserContact.kind == "email",
+            UserContact.verified.is_(True),
+        )
+    )
+    return contact.value if contact else None
+
+
 class MockGateway:
     """Deterministic gateway for dev/tests. Dedupes by idempotency key like a real provider should."""
 
@@ -76,7 +96,7 @@ class MockGateway:
         self.collections: dict = {}
         self.calls = 0
 
-    def submit_payout(self, *, idempotency_key, member_id, amount):
+    def submit_payout(self, *, idempotency_key, member_id, amount, session=None):
         self.calls += 1
         if idempotency_key in self.submissions:
             return self.submissions[idempotency_key]
@@ -90,7 +110,7 @@ class MockGateway:
     def lookup_payout(self, idempotency_key):
         return self.submissions.get(idempotency_key, PayoutResult(PayoutStatus.UNKNOWN, None, "not found"))
 
-    def create_collection(self, *, idempotency_key, member_id, amount, description, return_url, cancel_url):
+    def create_collection(self, *, idempotency_key, member_id, amount, description, return_url, cancel_url, session=None):
         if idempotency_key in self.collections:
             return self.collections[idempotency_key]
         if self.mode == "fail":
@@ -208,14 +228,22 @@ class PayPalGateway:
         description: str,
         return_url: str,
         cancel_url: str,
+        session: Optional[Session] = None,
     ) -> CollectionResult:
         """Create a PayPal invoice for member contribution collection."""
         # PayPal Invoicing API v2
         # https://developer.paypal.com/docs/api/invoicing/v2/
 
-        amount_str = f"{amount.minor / 100:.2f}"  # Convert minor units to major
-        # Determine currency from amount or default to USD
-        currency = getattr(amount, 'currency', 'USD')
+        amount_str = amount.to_major_string()      # exact, exponent-aware (gap #9)
+        currency = amount.currency
+
+        # Resolve the member's verified contact at the edge (gap #10).
+        # Only enforced when a DB session is provided (API path); direct calls skip it.
+        payer_email = None
+        if session is not None:
+            payer_email = resolve_contact_email(session, member_id)
+            if not payer_email:
+                return CollectionResult("FAILED", None, None, "no verified email contact for member")
 
         invoice = {
             "detail": {
@@ -229,7 +257,7 @@ class PayPalGateway:
                 "email": "noreply@chitcircle.example",
             },
             "primary_recipients": [
-                {"email": f"member-{member_id}@example.com"}  # Placeholder; real impl would use member email
+                {"email": payer_email}
             ],
             "items": [
                 {
@@ -278,27 +306,37 @@ class PayPalGateway:
 
     # --- Payout ---
 
-    def submit_payout(self, *, idempotency_key: str, member_id: str, amount: Money) -> PayoutResult:
+    def submit_payout(self, *, idempotency_key: str, member_id: str, amount: Money,
+                      session: Optional[Session] = None) -> PayoutResult:
         """
         Submit a payout to the winner.
         Uses PayPal Payouts API if available, otherwise falls back to invoice to winner.
         """
         # Try Payouts API first
         try:
-            return self._submit_payouts_api(idempotency_key, member_id, amount)
+            return self._submit_payouts_api(idempotency_key, member_id, amount, session=session)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403 and "PAYOUTS_NOT_ENABLED" in e.response.text:
                 # Fallback: create invoice/order to winner
-                return self._fallback_invoice_to_winner(idempotency_key, member_id, amount)
+                return self._fallback_invoice_to_winner(idempotency_key, member_id, amount, session=session)
             raise
         except Exception:
             # Any other error -> UNKNOWN, will be retried
             return PayoutResult(PayoutStatus.UNKNOWN, None, "payout submission failed")
 
-    def _submit_payouts_api(self, idempotency_key: str, member_id: str, amount: Money) -> PayoutResult:
+    def _submit_payouts_api(self, idempotency_key: str, member_id: str, amount: Money,
+                            session: Optional[Session] = None) -> PayoutResult:
         """Submit via PayPal Payouts API."""
-        amount_str = f"{amount.minor / 100:.2f}"
-        currency = getattr(amount, 'currency', 'USD')
+        amount_str = amount.to_major_string()
+        currency = amount.currency
+
+        # Resolve the winner's verified contact at the edge (gap #10).
+        # Only enforced when a DB session is provided (API path); direct calls skip it.
+        receiver_email = None
+        if session is not None:
+            receiver_email = resolve_contact_email(session, member_id)
+            if not receiver_email:
+                return PayoutResult(PayoutStatus.FAILED, None, "no verified email contact for member")
 
         payout = {
             "sender_batch_header": {
@@ -310,7 +348,7 @@ class PayPalGateway:
                 {
                     "recipient_type": "EMAIL",
                     "amount": {"value": amount_str, "currency": currency},
-                    "receiver": f"member-{member_id}@example.com",  # Placeholder
+                    "receiver": receiver_email,
                     "note": "Chit Circle winnings",
                     "sender_item_id": idempotency_key,
                 }
@@ -331,7 +369,8 @@ class PayPalGateway:
                 detail="Payout submitted via Payouts API",
             )
 
-    def _fallback_invoice_to_winner(self, idempotency_key: str, member_id: str, amount: Money) -> PayoutResult:
+    def _fallback_invoice_to_winner(self, idempotency_key: str, member_id: str, amount: Money,
+                                    session: Optional[Session] = None) -> PayoutResult:
         """
         Fallback: Create an invoice from organizer to winner.
         The winner "pays" the invoice which transfers money from organizer to winner.
@@ -339,8 +378,16 @@ class PayPalGateway:
         """
         # Create invoice where organizer is invoicer and winner is recipient
         # When winner "pays", money moves from organizer's PayPal to winner's PayPal
-        amount_str = f"{amount.minor / 100:.2f}"
-        currency = getattr(amount, 'currency', 'USD')
+        amount_str = amount.to_major_string()
+        currency = amount.currency
+
+        # Resolve the winner's verified contact at the edge (gap #10).
+        # Only enforced when a DB session is provided (API path); direct calls skip it.
+        recipient_email = None
+        if session is not None:
+            recipient_email = resolve_contact_email(session, member_id)
+            if not recipient_email:
+                return PayoutResult(PayoutStatus.FAILED, None, "no verified email contact for member")
 
         invoice = {
             "detail": {
@@ -354,7 +401,7 @@ class PayPalGateway:
                 "email": "organizer@chitcircle.example",
             },
             "primary_recipients": [
-                {"email": f"member-{member_id}@example.com"}
+                {"email": recipient_email}
             ],
             "items": [
                 {

@@ -29,3 +29,8 @@
 | **SSE** | Server-Sent Events: one-way real-time stream from server to client |
 | **SLO** | Service-level objective |
 | **ADR** | Architecture decision record |
+| **Mandate** | Single-use, short-expiry, hash-locked authorisation to execute exactly one approved action; the only path an agent uses to call a provider |
+| **Proposed action** | Structured, parameter-exact action an agent writes for a human to approve (`proposed_actions`) |
+| **Execution agent** | An agent that may run `execute_mandate` after approval (collections invoice, payout executor) |
+| **Step-up auth** | Strong re-authentication (biometric or OTP) required to approve a mandate or change payout details |
+| **Risk tier** | Tier 0 messages, Tier 1 invoices and refunds, Tier 2 payouts; each tier sets its approval requirements |

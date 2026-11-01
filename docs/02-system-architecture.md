@@ -56,7 +56,7 @@ flowchart LR
 | `payments` | Gateway interfaces, PayPal adapter, webhooks, reconciliation | `ledger`, `cycles` |
 | `notifications` | Channels, preferences, templates, delivery log | `identity` |
 | `risk` | Indicators and scores (advisory) | `ledger` (read) |
-| `agents` | Proposed actions, agent runs, tools | read APIs, `cycles` (via approvals) |
+| `agents` | Proposed actions, mandates, agent runs, tools | read APIs, `cycles` (via approvals and mandates) |
 | `readmodels` | Projections and cached views | `ledger` events |
 
 Rules: no module imports another's database models; cross-module calls go through service interfaces; read models are the only place that joins across modules.

@@ -13,7 +13,8 @@ Status: planning documents, written Oct 24, 2026, against the `chitcircle-financ
 5. **PayPal cannot serve India-domestic circles.** Public sources report PayPal stopped domestic payments in India in 2021 and supports cross-border only (**VERIFY** current status). PayPal fits diaspora and cross-border circles. India-domestic needs another rail behind the same gateway interface. See `06-paypal-integration.md`.
 6. **Lottery mode is off by default.** PayPal's acceptable use policy restricts prize-draw style activity and money-transmission or escrow-like services without approval (**VERIFY** current wording). See `07-security-privacy-compliance.md`.
 7. **Web first (Next.js), mobile second (Expo / React Native)**, sharing a typed client generated from FastAPI's OpenAPI spec. See `09-clients-web-and-mobile.md`.
-8. **Agents propose, humans approve, the engine calculates.** An LLM never computes or moves money. See `10-ai-agents.md`.
+8. **The LLM decides what to propose; deterministic code decides what executes.** Agents never compute a number (every amount comes from the engine), never act without explicit human approval, and never hold provider credentials. See `10-ai-agents.md`.
+9. **Mandate-gated execution.** An agent may execute a payment-related action only after explicit human approval (step-up auth), through a single-use, short-expiry **mandate** that hash-locks the exact amount, recipient, circle and cycle. Deterministic code re-reads, revalidates and recomputes before any PayPal call. See `adr/0007`.
 
 ## Reading order
 
@@ -34,6 +35,9 @@ Status: planning documents, written Oct 24, 2026, against the `chitcircle-financ
 | | `phases/` | Phase 0 to 6 with tasks and exit criteria |
 | | `adr/` | Architecture decision records |
 | | `appendix/` | Sponsor tool plan, open questions, glossary |
+| | `appendix/hackathon-compliance.md` | Hackathon requirements: judging checklist, pre-existing work, Official Rules to VERIFY |
+| | `backend-implementation.md` | Ground-up backend implementation plan: target vs current code, gap register, VERIFY list |
+| | `docs-CHANGELOG.md` | What changed in this documentation update and why |
 
 ## Phase overview
 
@@ -54,3 +58,4 @@ Status: planning documents, written Oct 24, 2026, against the `chitcircle-financ
 - "Engine" means `financial_engine/` (pure calculation, no I/O). "Service layer" means `app/services/`.
 - Money is always integer minor units plus a currency. Floats never appear in money code.
 - Every state change that matters writes a ledger event with an idempotency key.
+- An agent executes only through a single-use, parameter-locked mandate approved by a human (see `adr/0007`).

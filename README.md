@@ -391,12 +391,11 @@ In accordance with Section 20 of the specification, all ambiguous policy decisio
 
 ## Known Limitations & Roadmap
 
-- **Database Concurrency:** Row locks (`SELECT ... FOR UPDATE`), append-only triggers, and unique constraints are designed for PostgreSQL. While SQLite handles in-memory testing, production deployment requires PostgreSQL.
-- **Authentication:** Current API uses `X-Actor-Id` and `X-Actor-Role` header stubs; production requires JWT/OIDC authentication.
-- **Alembic Migrations:** Database schemas are currently generated via SQLAlchemy `create_all` on startup.
+- **Authentication:** API uses JWT with `jwt_secret_key()` required (no insecure default); `X-Actor-Id`/`X-Actor-Role` stub disabled in production (`allow_actor_headers()` returns `False`). Production still requires OIDC + phone OTP.
+- **Alembic Migrations:** Database schemas are currently generated via SQLAlchemy `create_all` on startup. Alembic directory exists (`backend/alembic/`) but no baseline migration is applied at startup yet.
 - **Implementation Status:**
-  - **Phase 1 & 2 (Complete):** Core financial engine, 12 invariants, append-only double-entry ledger, Next.js app shell, read-only circle/round views, mobile-first design system.
-  - **Phase 3–5 (In Progress):** Interactive frontend write actions (bidding, one-tap approvals), live PayPal sandbox webhook verification, and automated fast-forward simulation.
+  - **Done:** Core financial engine (integer minor-unit money, explicit rounding), 12+ financial invariants, append-only double-entry ledger, cycle state machine with resume-from-hold, sealed-bid hiding, commit-reveal lottery, settlement invariant checker, two-phase webhook ingestion pipeline, `Money.to_major_string()` currency-exponent-safe serialization, verified contact resolution (`user_contacts` + `resolve_contact_email`), RFC 9457 problem-details handlers, `/v1` versioned prefix, cursor-paginated ledger, HTTP idempotency middleware, X-Actor stub off in production, `jwt_secret_key()` required, CI on PostgreSQL 16 with per-test truncation isolation.
+  - **In Progress / Remaining:** Alembic baseline migration, outbox relay process, Celery + Redis queues, read-model projections + Redis cache + ETags, OIDC + phone OTP authN, DB-resolved circle roles + Postgres RLS, encrypted user contacts (remove `member-{id}@example.com` placeholder), ops console, PgBouncer + read replica, rate limiting.
 
 ---
 

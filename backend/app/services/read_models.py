@@ -1,11 +1,43 @@
-"""Read models for timeline and dashboard - optimized SQL queries."""
+"""Read models for timeline and dashboard - optimized SQL queries with Redis cache + ETags."""
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+import hashlib
+import json
+
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select, func, and_, or_
 from sqlalchemy.sql import case
 
+from .. import config
 from ..models import Circle, Member, Cycle, Obligation, BidRow, SettlementRow, LedgerEventRow
+
+# Read-model cache TTL (seconds). Read models are eventually consistent; a short TTL
+# keeps the cache fresh without hammering the write tables on every request.
+_CACHE_TTL_SECONDS = 60
+
+
+def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+    """Return cached read-model data, or None on miss / Redis error."""
+    try:
+        raw = config.get_redis().get(key)
+        if raw:
+            return json.loads(raw)
+    except Exception:  # noqa: BLE001 - cache is best-effort
+        pass
+    return None
+
+
+def _cache_set(key: str, data: Dict[str, Any]) -> None:
+    """Best-effort write of read-model data to Redis cache."""
+    try:
+        config.get_redis().setex(key, _CACHE_TTL_SECONDS, json.dumps(data, default=str))
+    except Exception:  # noqa: BLE001 - cache is best-effort
+        pass
+
+
+def _etag(data: Dict[str, Any]) -> str:
+    """Stable ETag for read-model payloads."""
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def get_circle_timeline(session: Session, circle_id: str) -> Dict[str, Any]:
@@ -13,6 +45,11 @@ def get_circle_timeline(session: Session, circle_id: str) -> Dict[str, Any]:
     Get timeline data for a circle: member x cycle grid with cell states.
     Returns data suitable for Bryntum timeline grid.
     """
+    cache_key = f"read:circle_timeline:{circle_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     # Verify circle exists
     circle = session.get(Circle, circle_id)
     if not circle:
@@ -118,12 +155,14 @@ def get_circle_timeline(session: Session, circle_id: str) -> Dict[str, Any]:
             "settlement_status": settlement.status if settlement else None,
         })
 
-    return {
+    result = {
         "circle_id": circle_id,
         "circle_name": circle.name,
         "members": timeline,
         "cycles": cycle_summaries,
     }
+    _cache_set(cache_key, result)
+    return result
 
 
 def get_circle_dashboard(session: Session, circle_id: str) -> Dict[str, Any]:
@@ -131,6 +170,11 @@ def get_circle_dashboard(session: Session, circle_id: str) -> Dict[str, Any]:
     Get organizer dashboard summary for a circle.
     Returns collections, auctions, payouts, risk summary.
     """
+    cache_key = f"read:circle_dashboard:{circle_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     circle = session.get(Circle, circle_id)
     if not circle:
         return {"error": "Circle not found"}
@@ -257,7 +301,7 @@ def get_circle_dashboard(session: Session, circle_id: str) -> Dict[str, Any]:
         for e in recent_events
     ]
 
-    return {
+    result = {
         "circle_id": circle_id,
         "circle_name": circle.name,
         "summary": {
@@ -278,12 +322,19 @@ def get_circle_dashboard(session: Session, circle_id: str) -> Dict[str, Any]:
         },
         "recent_activity": recent_activity,
     }
+    _cache_set(cache_key, result)
+    return result
 
 
 def get_member_view(session: Session, circle_id: str, member_id: str) -> Dict[str, Any]:
     """
     Get member-specific view: my payments, bid screen, settlement breakdown.
     """
+    cache_key = f"read:member_view:{circle_id}:{member_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     member = session.get(Member, member_id)
     if not member or member.circle_id != circle_id:
         return {"error": "Member not found in circle"}
@@ -355,7 +406,7 @@ def get_member_view(session: Session, circle_id: str, member_id: str) -> Dict[st
 
         my_cycles.append(cycle_data)
 
-    return {
+    result = {
         "member_id": member.id,
         "member_name": member.name,
         "position": member.position,
@@ -363,3 +414,5 @@ def get_member_view(session: Session, circle_id: str, member_id: str) -> Dict[st
         "security_status": member.security_status,
         "cycles": my_cycles,
     }
+    _cache_set(cache_key, result)
+    return result
