@@ -1,6 +1,6 @@
 # ChitCircle Backend
 
-> **Backend for ChitCircle** — an organizer-first platform for community savings circles (Chit Funds, ROSCAs, Tandas, Susus, Committees). Built with FastAPI, SQLAlchemy 2.0, PostgreSQL 16, and a pure-Python financial engine.
+> **Backend for ChitCircle** — an organizer-first platform for community savings circles (Chit Funds, ROSCAs, Tandas, Susus, Committees). Built with FastAPI, SQLAlchemy 2.0, PostgreSQL 16, Redis, and a pure-Python financial engine.
 
 ---
 
@@ -9,7 +9,9 @@
 - [Architecture Overview](#architecture-overview)
 - [Project Structure](#project-structure)
 - [Prerequisites](#prerequisites)
-- [Quickstart](#quickstart)
+- [Quickstart: Run from Scratch](#quickstart-run-from-scratch)
+  - [Option A: Docker Compose (full infrastructure)](#option-a-docker-compose-full-infrastructure)
+  - [Option B: Manual setup (Python venv + SQLite)](#option-b-manal-setup-python-venv--sqlite)
 - [Environment Variables](#environment-variables)
 - [Database Setup](#database-setup)
 - [Running the Server](#running-the-server)
@@ -20,6 +22,7 @@
 - [API Endpoints](#api-endpoints)
 - [Key Design Decisions](#key-design-decisions)
 - [Configuration Reference](#configuration-reference)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -112,7 +115,6 @@ backend/
 │   ├── seed_demo.py            # Demo data seeding
 │   └── simulator.py            # Cycle simulation for testing
 ├── tests/                      # Pytest suite (unit, property-based, integration)
-├── financial_engine/           # (see above)
 ├── .env                        # Local environment variables (NOT committed)
 ├── .env.example                # Environment variable template
 ├── chitcircle.db               # Local SQLite database (NOT committed)
@@ -126,59 +128,87 @@ backend/
 
 - **Python 3.11+**
 - **pip** or **uv**
-- **Docker & Docker Compose** (for PostgreSQL 16 — optional for local dev/tests which use SQLite)
+- **Docker & Docker Compose** (for PostgreSQL 16 + Redis — optional for local dev/tests which use SQLite)
 - **Redis** (optional for local dev — rate limiting, caching, and PayPal token cache fail open if unavailable)
+
+### Kafka
+
+Kafka is **not used** in this architecture. The async job queue is backed by:
+- **PostgreSQL `Job` table** — durable source of truth with claim/complete/fail/dead-letter
+- **Celery + Redis** — optional distributed task execution (broker + result backend)
+- **Standalone worker** (`scripts/worker.py`) — single-process loop that drains provider events, relays the outbox, and processes due jobs
+
+If you need Kafka for external event streaming, it can be added alongside without modifying the core job pipeline.
 
 ---
 
-## Quickstart
+## Quickstart: Run from Scratch
 
-### 1. Create and activate a virtual environment
+### Option A: Docker Compose (full infrastructure)
+
+This starts PostgreSQL 16 and Redis via Docker Compose, then runs the backend against them.
+
+From the **repo root**:
 
 ```bash
+# 1. Start infrastructure
+docker compose up -d
+
+# 2. Enter backend directory
 cd backend
 
+# 3. Create and activate a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
 # or: .venv\Scripts\activate     # Windows
-```
 
-### 2. Install dependencies
-
-```bash
+# 4. Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Configure environment
-
-```bash
+# 5. Configure environment
 cp .env.example .env
-# Edit .env with your values (see Environment Variables below)
-```
+# Edit .env: set DATABASE_URL to point to Docker PostgreSQL:
+#   DATABASE_URL=postgresql+psycopg://chitcircle:chitcircle@localhost:5432/chitcircle
 
-### 4. Start PostgreSQL (optional — for production-like local dev)
+# 6. Run Alembic migrations (PostgreSQL only)
+alembic upgrade head
 
-```bash
-cd ..
-docker compose up -d
-cd backend
-```
-
-### 5. Run the test suite
-
-```bash
+# 7. Run the test suite
 pytest
-```
 
-Tests run on an in-memory SQLite database by default, so Docker is not required.
-
-### 6. Start the development server
-
-```bash
+# 8. Start the development server
 uvicorn app.main:app --reload --port 8000
 ```
 
 Interactive OpenAPI documentation is available at `http://localhost:8000/docs`.
+
+### Option B: Manual setup (Python venv + SQLite)
+
+This is the fastest way to get running — no Docker required. Tests and local development use an in-memory SQLite database by default.
+
+```bash
+# 1. Enter backend directory
+cd backend
+
+# 2. Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+# or: .venv\Scripts\activate     # Windows
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Configure environment
+cp .env.example .env
+# Edit .env as needed (see Environment Variables below).
+# For SQLite testing, DATABASE_URL defaults to sqlite:// (in-memory).
+
+# 5. Run the test suite
+pytest
+
+# 6. Start the development server
+uvicorn app.main:app --reload --port 8000
+```
 
 ---
 
@@ -234,17 +264,23 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 
 No setup required. SQLAlchemy `create_all()` creates the schema on first connection. Alembic migrations are skipped for SQLite.
 
+Set `DATABASE_URL=sqlite://` for in-memory (tests) or `DATABASE_URL=sqlite:///./chitcircle.db` for a file-based local database.
+
 ### Option B: PostgreSQL 16 (production-like)
 
 1. Start PostgreSQL:
 
 ```bash
 cd ..  # repo root
-docker compose up -d
+docker compose up -d postgres redis
 cd backend
 ```
 
-2. Ensure `DATABASE_URL` in `.env` points to the running PostgreSQL instance.
+2. Ensure `DATABASE_URL` in `.env` points to the running PostgreSQL instance:
+
+```
+DATABASE_URL=postgresql+psycopg://chitcircle:chitcircle@localhost:5432/chitcircle
+```
 
 3. Run Alembic migrations:
 
@@ -285,7 +321,7 @@ On startup the application:
 ## Running Tests
 
 ```bash
-# Full test suite
+# Full test suite (124 tests)
 pytest
 
 # Specific test file
@@ -296,9 +332,12 @@ pytest -v
 
 # Stop on first failure
 pytest -x
+
+# Run with SQLite in-memory database
+DATABASE_URL="sqlite://" pytest
 ```
 
-Tests run on an in-memory SQLite database. PostgreSQL CI uses per-test truncation isolation (see `tests/conftest.py`).
+Tests run on an in-memory SQLite database by default. PostgreSQL CI uses per-test truncation isolation (see `tests/conftest.py`).
 
 The test suite covers:
 
@@ -536,7 +575,7 @@ Read models query write tables directly and cache results in Redis with a 60s TT
 
 ### `.env.example`
 
-The `.env.example` file at the repo root documents every environment variable with development defaults and production annotations. Copy it to `.env` and adjust for your deployment.
+The `.env.example` file documents every environment variable with development defaults and production annotations. Copy it to `.env` and adjust for your deployment.
 
 ### Production Checklist
 
@@ -550,6 +589,19 @@ The `.env.example` file at the repo root documents every environment variable wi
 - [ ] Redis running for rate limiting and caching (optional — fails open)
 - [ ] Worker process running (`python -m scripts.worker`)
 - [ ] Scheduler process running (`python -m scripts.scheduler`)
+
+---
+
+## Troubleshooting
+
+| Problem | Likely Cause | Fix |
+|---------|-------------|-----|
+| `401 invalid webhook signature` | `PAYPAL_WEBHOOK_ID` set in `.env` causes `PayPalWebhookVerifier` to be used instead of HMAC fallback | Unset `PAYPAL_WEBHOOK_ID` or set it to empty string in test environment |
+| `no such table: api_idempotency` | Using file-based SQLite instead of in-memory | Use `DATABASE_URL="sqlite://"` for tests |
+| `JWT_SECRET_KEY must be set` | `APP_ENV=production` with insecure or missing JWT secret | Set `JWT_SECRET_KEY` to a strong random value |
+| `webhook secret not configured` | `WEBHOOK_SECRET` not set | Set `WEBHOOK_SECRET` in `.env` |
+| Redis connection errors | Redis not running | Start Redis or accept degraded mode (caching/rate limiting fail open) |
+| `alembic` command not found | Alembic not installed | `pip install -r requirements.txt` includes alembic |
 
 ---
 

@@ -20,6 +20,7 @@ ORG = {"X-Actor-Id": "org1", "X-Actor-Role": "organizer"}
 @pytest.fixture()
 def env(monkeypatch):
     monkeypatch.setenv("WEBHOOK_SECRET", SECRET)
+    monkeypatch.setenv("PAYPAL_WEBHOOK_ID", "")  # force HMAC fallback in tests
     db.init_db(os.getenv("DATABASE_URL", "sqlite://"))
     app = create_app()
     gw = MockGateway()
