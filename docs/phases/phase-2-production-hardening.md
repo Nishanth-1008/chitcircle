@@ -6,7 +6,7 @@
 ## Workstreams
 
 ### A. Correctness on PostgreSQL
-- [ ] Full test suite in CI on PostgreSQL 16; drop SQLite for integration tests
+- [x] Full test suite in CI on PostgreSQL 16; drop SQLite for integration tests
 - [ ] Concurrency tests from `11` section 4 passing
 - [ ] Verify the append-only trigger, unique constraints and row-lock order
 - [ ] Alembic for all schema; startup never mutates schema
@@ -30,6 +30,8 @@
 - [ ] Provider fee account in the chart of accounts and ruleset fee policy
 - [ ] Written confirmation of permitted use from the payment partner; lottery mode flag off
 - [ ] Go-live checklist for the partner (credentials, webhooks, business verification)
+- [ ] Mandate hardening: server-side second-approver rule for Tier 2 payouts; step-up enforcement on every mandate approval; payout-destination-change cooldown; per-action, per-circle daily and velocity caps tuned from pilot data
+- [ ] Mandate audit export (proposal, rationale, approver, device, mandate, result) to the immutable audit log
 
 ### E. Operations and observability
 - [ ] OpenTelemetry, structured logs, error tracking, synthetic checks
