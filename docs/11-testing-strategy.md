@@ -33,6 +33,17 @@ The prototype has 86 tests: unit tests, Hypothesis property-based tests, and API
 5. Payout times out (`UNKNOWN`), then the checker and a late webhook both arrive: single final state.
 6. Worker killed between provider call and ledger write: redelivery produces no duplicate.
 7. Idempotent API retries return the original response.
+8. Two parallel `execute_mandate` calls for one mandate produce exactly one provider submission.
+9. The payout recipient can never approve their own payout, including through an agent proposal.
+
+**Mandate and agent-execution tests (must pass):**
+
+- Tampered mandate parameters (amount or recipient edited after approval): `params_hash` mismatch, execution aborted, no gateway call.
+- Expired mandate: rejected; no gateway call.
+- Engine amount recomputation differing from the mandate: aborts before the provider call, with an audit record.
+- Prompt-injection fixtures (hostile member notes, dispute text, instructions in memo fields) never alter the executed parameters.
+- Kill switch (global or per-agent) set: `execute_mandate` refuses; no gateway call.
+- A revoked or already-consumed mandate is refused; only an `ISSUED` mandate executes.
 
 ## 5. Provider tests
 

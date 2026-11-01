@@ -43,7 +43,7 @@
 | Auction | Open and close, see bids (per mode) | Place bid with "what I receive" and effective rate preview |
 | Settlement | Review, approve, release payout | See my dividend and net installment breakdown |
 | Ledger | Full, filter, export | My entries; group-level summary |
-| Approvals | One-tap queue of agent-proposed actions | Guarantor confirmations |
+| Approvals | One-tap queue of agent-proposed actions; step-up on approve issues the execution mandate | Guarantor confirmations |
 | Disputes | Open, assign, resolve | Flag an entry |
 | Settings | Ruleset versions, jurisdiction profile, visibility tiers, notification policy | Language, channels, privacy |
 

@@ -58,7 +58,7 @@ Initial sizing at 100k users (validate with load tests): 2 to 4 API instances, 2
 1. Pull request: lint, type check, unit and property tests, Postgres integration tests, OpenAPI diff, generated-client check, security scans, preview environment.
 2. Merge to main: build images, run migrations in staging, run the Postman or Newman suite and smoke tests.
 3. Production: manual approval, **expand-and-contract migrations first**, then rolling or blue-green deploy, automated smoke test, instant rollback on failure.
-4. Feature flags (for example Unleash or a managed provider) separate deploy from release.
+4. Feature flags (for example Unleash or a managed provider) separate deploy from release — including the global and per-agent **kill switches** that disable agent proposal or mandate execution instantly (`10`, `08`).
 
 ## 6. Configuration and secrets
 
