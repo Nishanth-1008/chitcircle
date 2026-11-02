@@ -1,5 +1,7 @@
 # ChitCircle Web (Phases 1–2)
 
+> **Backend Developers:** See the complete [Backend Integration Specification & Wireframes](file:///Users/nish/home/chitcircle/frontend/BACKEND_INTEGRATION_SPEC.md) for full screen wireframes, every button's backend endpoint, request/response schemas, error handling, and state machine transitions.
+
 Next.js 15 (App Router) + TypeScript, plain CSS with design tokens. Mobile-first (360–430 px), light/dark/system theme.
 Implements **Phase 1** (shell, theme, nav, components, typed API client) and **Phase 2** (read-only circles, rounds,
 ledger/activity, settlement, reconciliation). No write paths, no payments.
