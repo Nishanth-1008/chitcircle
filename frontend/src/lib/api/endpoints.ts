@@ -48,4 +48,13 @@ export const api = {
     request<{ status: string; payout_reference: string }>(ctx, `/settlements/${id(settlementId)}/payout`, { method: 'POST', signal }),
   getReconciliation: (ctx: ApiContext, settlementId: string, signal?: AbortSignal) =>
     request<ReconciliationView>(ctx, `/settlements/${id(settlementId)}/reconciliation`, { signal }),
+
+  createCollection: (ctx: ApiContext, cycleId: string, memberId: string, signal?: AbortSignal) =>
+    request(ctx, `/collections/create?cycle_id=${id(cycleId)}&member_id=${id(memberId)}`, { method: 'POST', signal }),
+
+  checkPayout: (ctx: ApiContext, settlementId: string, signal?: AbortSignal) =>
+    request(ctx, `/settlements/${id(settlementId)}/payout/check`, { method: 'POST', signal }),
+
+  finalizeSettlement: (ctx: ApiContext, settlementId: string, signal?: AbortSignal) =>
+    request(ctx, `/settlements/${id(settlementId)}/finalize`, { method: 'POST', signal }),
 };

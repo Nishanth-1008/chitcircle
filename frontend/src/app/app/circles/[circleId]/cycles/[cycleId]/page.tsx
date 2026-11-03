@@ -1,16 +1,17 @@
 'use client';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityRow, DataBoundary, RoundStepper, StateBadge, useExpandable } from '@/components/domain';
 import { Icon } from '@/components/Icon';
 import { Screen } from '@/components/shell';
-import { Amount, Avatar, Banner, ErrorState, SectionHead, Skeleton, StatusPill } from '@/components/ui';
+import { Amount, Avatar, Banner, Button, ErrorState, SectionHead, Skeleton, StatusPill } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
+import { describeError } from '@/lib/api/errors';
 import { resolveCurrency } from '@/lib/api/currency';
 import { memberName, myObligation, settledCount } from '@/lib/derive';
 import { dueLabel, formatDate, formatDateTime } from '@/lib/format';
-import { useApi } from '@/lib/hooks';
+import { useApi, useSingleFlight } from '@/lib/hooks';
 import { findSettlementId, sortLedger } from '@/lib/ledger';
 import { roleIn } from '@/lib/permissions';
 import { useSaved } from '@/lib/saved';
@@ -40,6 +41,80 @@ export default function RoundPage() {
   const settlementId = findSettlementId(ledger.data);
 
   const mismatch = cycle.data && cycle.data.circle_id !== circleId;
+  const role = roleIn(circle.data, ctx.actor);
+  const member = circle.data?.members.find((m) => m.id === ctx.actor?.id);
+  const hasWon = !!member?.has_won;
+  const live = ctx.mode === 'live';
+
+  const [openCycleMsg, setOpenCycleMsg] = useState('');
+  const [openAuctionMsg, setOpenAuctionMsg] = useState('');
+  const [closeAuctionMsg, setCloseAuctionMsg] = useState('');
+  const [selectRecipientMsg, setSelectRecipientMsg] = useState('');
+  const [calculateSettlementMsg, setCalculateSettlementMsg] = useState('');
+  const [bidDiscount, setBidDiscount] = useState('');
+  const [bidError, setBidError] = useState('');
+  const [collectionMsg, setCollectionMsg] = useState('');
+
+  const openCycleAction = useSingleFlight(async () => {
+    setOpenCycleMsg('');
+    try {
+      await api.openCycle(ctx, cycleId);
+      setOpenCycleMsg('Round opened for collections.');
+    } catch (e) { setOpenCycleMsg(describeError(e).message); }
+  });
+
+  const submitCollectionAction = useSingleFlight(async () => {
+    setCollectionMsg('');
+    const m = circle.data?.members.find((mm) => mm.id === ctx.actor?.id);
+    if (!m) { setCollectionMsg('You are not a member of this circle.'); return; }
+    try {
+      await api.createCollection(ctx, cycleId, m.id);
+      setCollectionMsg('Payment request created. Complete it on PayPal.');
+    } catch (e) { setCollectionMsg(describeError(e).message); }
+  });
+
+  const openAuctionAction = useSingleFlight(async () => {
+    setOpenAuctionMsg('');
+    try {
+      await api.openAuction(ctx, cycleId);
+      setOpenAuctionMsg('Auction opened.');
+    } catch (e) { setOpenAuctionMsg(describeError(e).message); }
+  });
+
+  const closeAuctionAction = useSingleFlight(async () => {
+    setCloseAuctionMsg('');
+    try {
+      await api.closeAuction(ctx, cycleId);
+      setCloseAuctionMsg('Auction closed.');
+    } catch (e) { setCloseAuctionMsg(describeError(e).message); }
+  });
+
+  const selectRecipientAction = useSingleFlight(async () => {
+    setSelectRecipientMsg('');
+    try {
+      await api.selectRecipient(ctx, cycleId);
+      setSelectRecipientMsg('Recipient selected.');
+    } catch (e) { setSelectRecipientMsg(describeError(e).message); }
+  });
+
+  const calculateSettlementAction = useSingleFlight(async () => {
+    setCalculateSettlementMsg('');
+    try {
+      await api.calculateSettlement(ctx, cycleId);
+      setCalculateSettlementMsg('Settlement calculated.');
+    } catch (e) { setCalculateSettlementMsg(describeError(e).message); }
+  });
+
+  const submitBidAction = useSingleFlight(async () => {
+    setBidError('');
+    const discount = Math.round(Number(bidDiscount) * 100);
+    if (!Number.isFinite(discount) || discount < 0) { setBidError('Enter a valid discount.'); return; }
+    try {
+      await api.submitBid(ctx, cycleId, { member_id: ctx.actor!.id, discount });
+      setBidDiscount('');
+      setBidError('');
+    } catch (e) { setBidError(describeError(e).message); }
+  });
 
   return (
     <Screen title={cycle.data ? `Round ${cycle.data.number}` : 'Round'} back={`/app/circles/${encodeURIComponent(circleId)}`}>
@@ -90,6 +165,17 @@ export default function RoundPage() {
                       <div><div className="stat__label">Outstanding</div><div className="stat__value"><Amount minor={mine.outstanding} currency={currency.code} tone={mine.outstanding > 0 ? 'warning' : 'income'} /></div></div>
                     </div>
                     {mine.outstanding > 0 && <p className="muted">Online payment isn’t connected yet. A contribution counts only after the payment provider confirms it.</p>}
+                  </section>
+                )}
+
+                {live && mine && role === 'member' && mine.outstanding > 0 && !hasWon && (
+                  <section className="card stack" aria-label="Pay your contribution">
+                    <SectionHead title="Pay your contribution" />
+                    <p className="muted">Create a PayPal payment request for your outstanding contribution. You’ll complete the payment on PayPal’s site.</p>
+                    {collectionMsg && <Banner tone="info">{collectionMsg}</Banner>}
+                    <Button variant="primary" disabled={submitCollectionAction.pending} onClick={() => void submitCollectionAction.run()}>
+                      {submitCollectionAction.pending ? 'Creating…' : 'Pay Contribution'}
+                    </Button>
                   </section>
                 )}
 
@@ -180,6 +266,77 @@ export default function RoundPage() {
                       ))}
                     </ol>
                   </details>
+                )}
+
+                {live && c.state === 'DRAFT' && role === 'organizer' && (
+                  <section className="card stack" aria-label="Start collections">
+                    <SectionHead title="Start collections" />
+                    <p className="muted">Open this round so members can begin contributing.</p>
+                    {openCycleMsg && <Banner tone="info">{openCycleMsg}</Banner>}
+                    <Button variant="primary" disabled={openCycleAction.pending} onClick={() => void openCycleAction.run()}>
+                      {openCycleAction.pending ? 'Opening…' : 'Start Collections'}
+                    </Button>
+                  </section>
+                )}
+
+                {live && c.state === 'COLLECTIONS_IN_PROGRESS' && role === 'organizer' && (
+                  <section className="card stack" aria-label="Open auction">
+                    <SectionHead title="Open auction" />
+                    <p className="muted">Move this round to auction so members can place bids.</p>
+                    {openAuctionMsg && <Banner tone="info">{openAuctionMsg}</Banner>}
+                    <Button variant="primary" disabled={openAuctionAction.pending} onClick={() => void openAuctionAction.run()}>
+                      {openAuctionAction.pending ? 'Opening…' : 'Open Auction'}
+                    </Button>
+                  </section>
+                )}
+
+                {live && c.state === 'AUCTION_OPEN' && role === 'organizer' && (
+                  <section className="card stack" aria-label="Close auction">
+                    <SectionHead title="Close auction" />
+                    <p className="muted">Close bidding and let the server determine the winner.</p>
+                    {closeAuctionMsg && <Banner tone="info">{closeAuctionMsg}</Banner>}
+                    <Button variant="primary" disabled={closeAuctionAction.pending} onClick={() => void closeAuctionAction.run()}>
+                      {closeAuctionAction.pending ? 'Closing…' : 'Close Auction'}
+                    </Button>
+                  </section>
+                )}
+
+                {live && c.state === 'AUCTION_OPEN' && role === 'member' && !hasWon && (
+                  <section className="card stack" aria-label="Place your bid">
+                    <SectionHead title="Place your bid" />
+                    <p className="muted">Enter the discount you want to bid. The server validates bids and decides the winner.</p>
+                    <form className="stack" onSubmit={(e) => { e.preventDefault(); void submitBidAction.run(); }} noValidate>
+                      <div className="field">
+                        <label htmlFor="bid-discount">Discount (minor units)</label>
+                        <input id="bid-discount" type="number" value={bidDiscount} onChange={(e) => { setBidDiscount(e.target.value); setBidError(''); }} />
+                        <span className="field__help">Whole minor units (e.g. 400000 for ₹4,00,000 off).</span>
+                      </div>
+                      {bidError && <Banner tone="danger">{bidError}</Banner>}
+                      <Button block type="submit" disabled={submitBidAction.pending}>{submitBidAction.pending ? 'Bidding…' : 'Place Bid'}</Button>
+                    </form>
+                  </section>
+                )}
+
+                {live && c.state === 'AUCTION_CLOSED' && role === 'organizer' && (
+                  <section className="card stack" aria-label="Select recipient">
+                    <SectionHead title="Select recipient" />
+                    <p className="muted">Choose the auction winner who receives the payout this round.</p>
+                    {selectRecipientMsg && <Banner tone="info">{selectRecipientMsg}</Banner>}
+                    <Button variant="primary" disabled={selectRecipientAction.pending} onClick={() => void selectRecipientAction.run()}>
+                      {selectRecipientAction.pending ? 'Selecting…' : 'Select Recipient'}
+                    </Button>
+                  </section>
+                )}
+
+                {live && c.state === 'SETTLEMENT_CALCULATED' && role === 'organizer' && (
+                  <section className="card stack" aria-label="Calculate settlement">
+                    <SectionHead title="Calculate settlement" />
+                    <p className="muted">Confirm the settlement figures before they go to approval.</p>
+                    {calculateSettlementMsg && <Banner tone="info">{calculateSettlementMsg}</Banner>}
+                    <Button variant="primary" disabled={calculateSettlementAction.pending} onClick={() => void calculateSettlementAction.run()}>
+                      {calculateSettlementAction.pending ? 'Calculating…' : 'Calculate Settlement'}
+                    </Button>
+                  </section>
                 )}
               </>
             );
