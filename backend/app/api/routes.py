@@ -281,6 +281,11 @@ def create_collection(
         session=s,
     )
 
+    if result.status == "FAILED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=result.detail or "collection creation failed",
+        )
     return result
 
 
