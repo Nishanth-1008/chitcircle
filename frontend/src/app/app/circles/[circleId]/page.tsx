@@ -50,6 +50,7 @@ export default function CircleDetailPage() {
   const [roundId, setRoundId] = useState('');
   const [roundError, setRoundError] = useState('');
   const [cycleCreateMsg, setCycleCreateMsg] = useState('');
+  const [securityMsg, setSecurityMsg] = useState('');
 
   const circle = useApi(`circle:${sessionKey(ctx)}:${circleId}`, (s) => api.getCircle(ctx, circleId, s));
   useEffect(() => { if (circle.data) saved.saveCircle(circle.data.id); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [circle.data?.id]);
@@ -76,6 +77,14 @@ export default function CircleDetailPage() {
       saved.saveRound(cycle.id, circleId);
       router.push(`/app/circles/${encodeURIComponent(circleId)}/cycles/${encodeURIComponent(cycle.id)}`);
     } catch (e) { setRoundError(describeError(e).message); }
+  });
+
+  const updateSecurityAction = useSingleFlight(async (memberId: string, status: string) => {
+    setSecurityMsg('');
+    try {
+      await api.updateMemberSecurity(ctx, circleId, memberId, status);
+      setSecurityMsg(`Security status updated to ${status}.`);
+    } catch (e) { setSecurityMsg(describeError(e).message); }
   });
 
   const rounds = saved.items.rounds.filter((r) => r.circleId === circleId);
@@ -140,6 +149,7 @@ export default function CircleDetailPage() {
 
               {tab === 'members' && (
                 <section className="card" aria-label="Members">
+                  {role === 'organizer' && securityMsg && <Banner tone="info">{securityMsg}</Banner>}
                   <ul>
                     {c.members.map((m) => {
                       const sec = SECURITY_INFO[m.security_status] ?? SECURITY_INFO.NONE;
@@ -153,6 +163,19 @@ export default function CircleDetailPage() {
                           <div className="stack" style={{ gap: 4, alignItems: 'flex-end' }}>
                             {m.has_won && <StatusPill tone="success" icon="trophy">Received payout</StatusPill>}
                             {canViewMemberSecurity(role) && <StatusPill tone={sec.tone}>{sec.label}</StatusPill>}
+                            {role === 'organizer' && (
+                              <select
+                                value={m.security_status}
+                                onChange={(e) => void updateSecurityAction.run(m.id, e.target.value)}
+                                disabled={updateSecurityAction.pending}
+                                className="select"
+                              >
+                                <option value="NONE">None</option>
+                                <option value="PENDING">Pending</option>
+                                <option value="VERIFIED">Verified</option>
+                                <option value="INVALID">Invalid</option>
+                              </select>
+                            )}
                           </div>
                         </li>
                       );

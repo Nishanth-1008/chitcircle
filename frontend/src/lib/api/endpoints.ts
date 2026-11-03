@@ -57,4 +57,9 @@ export const api = {
 
   finalizeSettlement: (ctx: ApiContext, settlementId: string, signal?: AbortSignal) =>
     request(ctx, `/settlements/${id(settlementId)}/finalize`, { method: 'POST', signal }),
+
+  updateMemberSecurity: (ctx: ApiContext, circleId: string, memberId: string, status: string, signal?: AbortSignal) =>
+    request(ctx, `/circles/${id(circleId)}/members/${id(memberId)}/security`, {
+      method: 'PUT', body: { status }, signal
+    }),
 };
