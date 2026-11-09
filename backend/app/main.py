@@ -321,7 +321,7 @@ def create_app() -> FastAPI:
             media_type=response.media_type,
         )
 
-    app.include_router(router, prefix="/v1")
+    app.include_router(router)
     return app
 
 
