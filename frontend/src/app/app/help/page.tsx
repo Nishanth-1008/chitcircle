@@ -1,61 +1,55 @@
-'use client';
 import { Screen } from '@/components/shell';
-import { Banner, StatusPill } from '@/components/ui';
-import { PAYOUT_GATEWAY } from '@/lib/config';
+import { Card } from '@/components/ui';
 
-const FAQ = [
-  ['What is a chit circle?', 'A group of members who contribute a fixed amount every round. Each round, one member receives the pot. The circle’s rules decide how that member is chosen: rotation, a lottery, or an auction.'],
-  ['When does a contribution count as paid?', 'Only when the payment provider confirms it and the server records it. Tapping a button or being redirected is never treated as payment.'],
-  ['Who decides auction winners and dividends?', 'The server. This app only displays what the server calculated; it never works out winners, dividends, commission or payouts itself.'],
-  ['Why can’t I see other members’ bids?', 'In sealed-bid auctions, bids stay hidden until the auction closes.'],
-  ['What does “Demo” mean?', 'Demo screens use fictional people and amounts so you can explore the layout. No real money moves.'],
+const FAQ: { q: string; a: string }[] = [
+  { q: 'What is a savings circle?', a: 'A group agrees to contribute a fixed amount every round. Each round one member receives the whole pot, until everyone has received it once. Chit funds, tandas, susus, ROSCAs and committees are all versions of this.' },
+  { q: 'How does the auction work?', a: 'In auction circles, members who have not received the pot yet bid the discount they are willing to give up. The highest valid discount wins. The recipient gets the pot minus the discount; the discount minus the organizer’s commission is shared back to members as a dividend, which lowers everyone’s installment for that round.' },
+  { q: 'Why can’t I pay before the auction?', a: 'Your installment depends on the dividend, which is only known once the auction settles. Paying the full share earlier would overpay, and the round could not be reconciled until it was refunded.' },
+  { q: 'When does my contribution count as paid?', a: 'Only when the payment provider confirms it to ChitCircle. Starting a PayPal payment or being invoiced does not count by itself. In the sandbox, “Simulate confirmed payment” sends a labelled sandbox confirmation through the same pipeline.' },
+  { q: 'Who decides the winner and the numbers?', a: 'A deterministic settlement engine applies the circle’s rules. The app only displays what the engine calculated; no amount is computed in your browser or by an AI model.' },
+  { q: 'What do the agents do?', a: 'The collections agent checks who owes money and proposes reminders or catch-up invoices on a fixed schedule. The explainer breaks down your installment from the ledger, and the bid advisor shows what a bid would mean for you. Agents never move money: the organizer approves each action with verification, which issues a single-use mandate.' },
+  { q: 'Why can’t I see other members’ bids?', a: 'In sealed-bid circles, bids stay hidden until the auction closes so nobody can react to anyone else’s bid.' },
+  { q: 'Can a record be changed?', a: 'No. The ledger is append-only. Corrections are new linked entries, and a member can flag a round, which opens a dispute the organizer must resolve on the record.' },
+  { q: 'Does ChitCircle hold our money?', a: 'No. ChitCircle is software for organizers. Payments run through PayPal; the circle’s funds never sit with ChitCircle.' },
 ];
 
-type Row = { what: string; endpoint: string; ok: boolean; note?: string };
-const CONNECTED: Row[] = [
-  { what: 'View a circle and its members', endpoint: 'GET /circles/{id}', ok: true },
-  { what: 'View a round and who has paid', endpoint: 'GET /cycles/{id}', ok: true },
-  { what: 'Round ledger and activity', endpoint: 'GET /cycles/{id}/ledger', ok: true },
-  { what: 'Auction bids (sealed bids stay hidden)', endpoint: 'GET /cycles/{id}/auction/bids', ok: true },
-  { what: 'Settlement and reconciliation', endpoint: 'GET /settlements/{id}[/reconciliation]', ok: true },
-  { what: 'List your circles / rounds / settlements', endpoint: 'not in backend', ok: false },
-  { what: 'Sign up, sign in, profile', endpoint: 'not in backend', ok: false, note: 'Development identity only' },
-  { what: 'Invitations and joining a circle', endpoint: 'not in backend', ok: false },
-  { what: 'Pay a contribution online', endpoint: 'not in backend', ok: false },
-  { what: 'Notifications', endpoint: 'not in backend', ok: false },
-  { what: 'Combined activity feed, ledger event detail', endpoint: 'not in backend', ok: false },
-  { what: 'Create circles, place bids, approve, pay out', endpoint: 'exists in backend', ok: false, note: 'Not in this release of the app' },
+const CONNECTED: [string, string][] = [
+  ['Accounts, sign-in and invitations by email', 'Live'],
+  ['Circles, rounds, members and rules', 'Live'],
+  ['Sealed and open auctions with bid advisor', 'Live'],
+  ['Settlement, approvals, payout and reconciliation', 'Live'],
+  ['Shared ledger with journal postings', 'Live'],
+  ['Collections agent, approvals and mandates', 'Live'],
+  ['PayPal invoices and payouts', 'Sandbox (when credentials are configured)'],
+  ['PayPal webhook confirmations', 'Needs a public webhook URL; locally, use sandbox simulation'],
+  ['SMS / email reminder delivery', 'In-app only for now'],
 ];
 
 export default function HelpPage() {
   return (
-    <Screen title="Help & support" back="/app/profile">
-      <section className="card" aria-label="Frequently asked questions">
-        {FAQ.map(([q, a]) => (
-          <details className="faq" key={q}><summary>{q}</summary><p>{a}</p></details>
-        ))}
-      </section>
-
-      <section className="card stack" aria-label="What is connected">
-        <h2>What’s connected</h2>
-        <p className="muted">This release is read-only. Features marked “Not connected” are waiting on the backend or a later release.</p>
-        <table className="api-table">
-          <tbody>
-            {CONNECTED.map((r) => (
-              <tr key={r.what}>
-                <td><div style={{ fontWeight: 600 }}>{r.what}</div><code>{r.endpoint}</code>{r.note && <div className="muted">{r.note}</div>}</td>
-                <td style={{ textAlign: 'right' }}><StatusPill tone={r.ok ? 'success' : 'neutral'}>{r.ok ? 'Connected' : 'Not connected'}</StatusPill></td>
-              </tr>
+    <Screen title="Help & how it works" back={{ href: '/app/profile', label: 'Profile' }}>
+      <div className="grid grid--main">
+        <Card title="Frequently asked questions">
+          <div>
+            {FAQ.map((f) => (
+              <details key={f.q} className="faq">
+                <summary>{f.q}</summary>
+                <p>{f.a}</p>
+              </details>
             ))}
-          </tbody>
-        </table>
-      </section>
-      <Banner tone="warning" icon="alert">
-        {PAYOUT_GATEWAY === 'stub'
-          ? 'The payout provider integration is a stub. No payout status in this app should be read as real money having moved.'
-          : 'A payout provider is configured. Payouts count only after the provider confirms them and reconciliation passes.'}
-      </Banner>
-      <Banner tone="neutral" icon="info">Need a person? A support channel hasn’t been set up yet.</Banner>
+          </div>
+        </Card>
+        <Card title="What’s connected">
+          <ul className="list">
+            {CONNECTED.map(([what, status]) => (
+              <li key={what} className="list__row">
+                <span className="grow">{what}</span>
+                <span className="muted small right">{status}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
     </Screen>
   );
 }

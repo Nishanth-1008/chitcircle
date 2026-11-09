@@ -1302,6 +1302,16 @@ override.
 | `POST /ops/reconciliation/rerun` | enqueue provider reconciliation | organizer-only |
 | `POST /ops/circles/{id}/pause` | set circle_paused kill switch | organizer-only |
 | `POST /ops/circles/{id}/resume` | clear circle_paused kill switch | organizer-only |
+| `GET /auth/me` · `POST /auth/refresh` · `PUT /auth/me/payout-email` | `accounts` | profile, sliding JWT, encrypted PayPal contact |
+| `GET /config` | — | sandbox tools on/off, active payment gateway |
+| `GET /circles` | `queries.list_my_circles` | circles the caller organizes or holds a seat in |
+| `GET /circles/{id}/cycles` | `queries.list_cycles` | round summaries incl. caller's outstanding |
+| `GET /circles/{id}/ledger` | `queries.circle_ledger` | newest-first cursor feed; members see own + group events |
+| `POST /circles/{id}/agents/collections/run` | `agents.run_collections_agent` | deterministic escalation → proposals |
+| `GET /cycles/{id}/auction/preview` | `agents.bid_preview` | bid advisor (engine-computed) |
+| `GET /cycles/{id}/members/{m}/explanation` | `agents.explain_installment` | explainer from stored settlement |
+| `POST /proposed-actions/{id}/reject` | `reject_proposal` | dismiss without a mandate |
+| `POST /sandbox/cycles/{id}/payments` · `POST /sandbox/settlements/{id}/payout` | `sandbox` | non-production provider simulation |
 
 ### 14.3 Planned additions (Phase 1–3)
 

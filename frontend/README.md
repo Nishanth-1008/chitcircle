@@ -1,44 +1,45 @@
-# ChitCircle Web (Phases 1–2)
+# ChitCircle Web
 
-> **Backend Developers:** See the complete [Backend Integration Specification & Wireframes](file:///Users/nish/home/chitcircle/frontend/BACKEND_INTEGRATION_SPEC.md) for full screen wireframes, every button's backend endpoint, request/response schemas, error handling, and state machine transitions.
-
-Next.js 15 (App Router) + TypeScript, plain CSS with design tokens. Mobile-first (360–430 px), light/dark/system theme.
-Implements **Phase 1** (shell, theme, nav, components, typed API client) and **Phase 2** (read-only circles, rounds,
-ledger/activity, settlement, reconciliation). No write paths, no payments.
-
-
+Next.js 15 (App Router) + TypeScript, plain CSS with design tokens. Responsive: sidebar on desktop, bottom
+navigation on mobile, light/dark/system theme. Talks only to the FastAPI backend through the same-origin
+`/api/backend/*` proxy (`next.config.mjs`).
 
 ## Run
+
 ```bash
+cp .env.example .env.local     # CHITCIRCLE_API_URL=http://localhost:8000
 npm install
-npm run dev            # demo mode works with no backend
-npm test               # 64 tests (vitest + testing-library)
+npm run dev                    # http://localhost:3000 (needs the backend running)
+npm test                       # vitest + testing-library
 npm run typecheck && npm run build
 ```
-Live API (optional): copy `.env.example` to `.env.local`, start the FastAPI backend (`uvicorn app.main:app`), set
-`CHITCIRCLE_API_URL`. The browser calls same-origin `/api/backend/*`, which Next proxies to the backend (the backend
-has no CORS; `/webhooks/*` is deliberately **not** proxied). Use **Sign in (development)** with an actor ID.
 
-## Routes
-`/welcome`, `/sign-in` (dev only), `/app/home`, `/app/circles`, `/app/circles/[id]`,
-`/app/circles/[id]/cycles/[cycleId]`, `/app/activity`, `/app/settlements/[id]`, `/app/settlements/[id]/reconciliation`,
-`/app/profile`, `/app/help`.
+Create an account on `/register`. To join someone's circle, register with the email the organizer invited:
+the seat links to your account automatically.
 
-## Honest boundaries (see also the in-app Help screen)
-- **No list endpoints exist**, so Home/Circles/Activity are built from circle/round IDs the user opens, saved in this
-  browser (`lib/saved.ts`), and loaded from the authoritative GET endpoints. The UI says so.
-- **Auth is a stub.** `X-Actor-*` headers are sent for identification only; roles are derived from server data
-  (`organizer_id`, member IDs), never from a client toggle (`lib/permissions.ts`).
-- **No frontend financial maths.** Amounts are server integers formatted by one adapter (`lib/money.ts`).
-  `GET /cycles` and `/circles` carry no currency, so it is taken from ledger/settlement when present, else the configured
-  default and marked "assumed" (live mode).
-- **Money status never overstated:** "Contribution due" ≠ payment; approved ≠ paid; payout "requested/submitted" ≠
-  confirmed; a stub-gateway notice shows in live mode.
-- Demo data is fictional and labelled. Create circle, bids, approvals, payouts, join/invite, notifications, and online
-  payment are **not implemented** (Phases 3–5 / missing backend APIs). `useSingleFlight` (duplicate-submit guard) is
-  ready and tested for those commands.
+## Screens
 
-## Deviations from the design spec
-- Secondary text `#666D68` and darker income/expense/warning *text* tokens, for 4.5:1 contrast. Fills keep spec colors.
-- The Stitch mock's "funds held in escrow / RBI compliant" copy was intentionally **not** reproduced (unverified claim).
-- Spec's "Create account" is replaced by "Explore the demo" until an auth API exists.
+| Route | What it does |
+|---|---|
+| `/welcome`, `/sign-in`, `/register` | JWT sign-in and sign-up (`POST /auth/login`, `/auth/register`) |
+| `/app/home` | Everything that needs you across circles, dues per currency, your circles |
+| `/app/circles`, `/app/circles/new` | Your circles; create a circle (tradition template, invites by email, rules, live plain-language summary) |
+| `/app/circles/[id]` | Overview, rounds, members (security status, risk), member × round timeline, rules and versions |
+| `/app/circles/[id]/cycles/[cycleId]` | Round workspace: role-aware next step, sealed/open bidding with the bid advisor, contributions, “why is my installment X?”, ledger, history, disputes |
+| `/app/settlements/[id]` (+ `/reconciliation`) | Breakdown, approvals, payout release/check/confirm, three-way reconciliation, finalize |
+| `/app/circles/[id]/agents` | Approvals inbox: run the collections agent, approve with step-up (issues a single-use mandate), run or revoke |
+| `/app/activity` | Circle-wide shared ledger with filters and cursor paging |
+| `/app/profile`, `/app/help` | PayPal email, theme, connection status, sign out; FAQ |
+
+## Rules the client follows
+
+- **No money math in the browser.** Amounts are server integers (minor units) formatted by `lib/money.ts`; typed
+  amounts are parsed to minor units with string arithmetic. Bid previews, explanations and settlements come from
+  the engine.
+- **The server decides permissions.** Role-specific UI uses `my_role` / `my_member_id` from the API; every command
+  is re-checked server-side.
+- **Money status is never overstated.** A contribution counts only once the provider confirms it; approved ≠ paid;
+  a submitted payout is not confirmed. Auction installments are payable only after settlement (the dividend lowers them).
+- **Every command is single-flight** (`useAction`) and sends a fresh `Idempotency-Key`.
+- **Sandbox tools are labelled.** When the backend reports `sandbox_tools`, “Simulate confirmed payment” and
+  “Simulate provider confirmation” send sandbox provider events through the real ingest pipeline.

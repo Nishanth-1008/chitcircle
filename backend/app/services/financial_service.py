@@ -34,6 +34,7 @@ from financial_engine.states import EXCEPTION_STATES, CycleState as S, ensure_tr
 from financial_engine.validation import check_settlement
 
 from .. import config
+from . import accounts as A
 from ..errors import Conflict, Forbidden, NotFound, ServiceError, Unprocessable
 from ..models import (ApprovalRow, AgentMandate, BidRow, Circle, Cycle, FeatureFlag,
                       LedgerEventRow, LotteryRow, Member, Obligation, ProposedActionRow,
@@ -187,30 +188,55 @@ def _view_settlement(row: SettlementRow) -> dict:
 
 
 # ---------------------------------------------------------------- circles & rulesets
-def create_circle(session: Session, actor_id: str, name: str, ruleset_data: dict, member_names: list) -> dict:
+def create_circle(session: Session, actor_id: str, name: str, ruleset_data: dict, member_specs: list) -> dict:
     cid = str(uuid.uuid4())
     rules = Ruleset.from_dict({**ruleset_data, "circle_id": cid, "version": 1, "status": "ACTIVE"})
-    if len(member_names) != rules.member_count:
+    if len(member_specs) != rules.member_count:
         raise Unprocessable("number of members must equal ruleset member_count")
+    members = A.build_seats(session, cid, actor_id, member_specs)
     session.add(Circle(id=cid, name=name, organizer_id=actor_id))
     session.add(RulesetRow(circle_id=cid, version=1, data=rules.to_dict(), fingerprint=rules.fingerprint(),
                            status="ACTIVE", reason="initial ruleset", created_by=actor_id))
-    members = [Member(id=str(uuid.uuid4()), circle_id=cid, name=n, position=i + 1) for i, n in enumerate(member_names)]
+    for m in members:
+        m.id = str(uuid.uuid4())
     session.add_all(members)
     session.commit()
     return {"id": cid, "name": name, "organizer_id": actor_id, "ruleset_version": 1,
-            "members": [{"id": m.id, "name": m.name, "position": m.position} for m in members]}
+            "members": [{"id": m.id, "name": m.name, "position": m.position, "user_id": m.user_id}
+                        for m in members]}
 
 
-def get_circle(session: Session, circle_id: str) -> dict:
+def _active_ruleset_row(session: Session, circle_id: str) -> RulesetRow:
+    rows = list(session.scalars(select(RulesetRow).where(RulesetRow.circle_id == circle_id)
+                                .order_by(RulesetRow.version)))
+    active = [r for r in rows if r.status == "ACTIVE"]
+    return (active or rows)[-1]
+
+
+def get_circle(session: Session, circle_id: str, actor_id: Optional[str] = None,
+               actor_role: str = "member") -> dict:
     c = _circle(session, circle_id)
+    role = A.require_circle_access(session, c, actor_id, actor_role) if actor_id else "organizer"
     versions = list(session.scalars(select(RulesetRow).where(RulesetRow.circle_id == circle_id)
                                     .order_by(RulesetRow.version)))
+    active = _active_ruleset_row(session, circle_id)
+    mine = A.seat_for(session, circle_id, actor_id) if actor_id else None
+    members = []
+    for m in _members(session, circle_id):
+        view = {"id": m.id, "name": m.name, "position": m.position, "has_won": m.has_won,
+                "security_status": m.security_status, "user_id": m.user_id,
+                "linked": m.user_id is not None}
+        if role == "organizer":
+            view["invite_email"] = m.invite_email
+        members.append(view)
     return {"id": c.id, "name": c.name, "organizer_id": c.organizer_id,
-            "members": [{"id": m.id, "name": m.name, "position": m.position, "has_won": m.has_won,
-                         "security_status": m.security_status} for m in _members(session, circle_id)],
+            "created_at": as_utc(c.created_at).isoformat() if c.created_at else None,
+            "my_role": role, "my_member_id": mine.id if mine else None,
+            "currency": active.data.get("currency"), "ruleset_version": active.version,
+            "ruleset": active.data, "members": members,
             "rulesets": [{"version": r.version, "status": r.status, "fingerprint": r.fingerprint,
-                          "reason": r.reason} for r in versions]}
+                          "reason": r.reason, "created_at": as_utc(r.created_at).isoformat() if r.created_at else None}
+                         for r in versions]}
 
 
 def add_ruleset_version(session: Session, circle_id: str, actor_id: str, ruleset_data: dict, reason: str) -> dict:
@@ -272,13 +298,22 @@ def create_cycle(session: Session, circle_id: str, actor_id: str, due_date: date
     return _view_cycle(cycle)
 
 
-def get_cycle(session: Session, cycle_id: str) -> dict:
+def get_cycle(session: Session, cycle_id: str, actor_id: Optional[str] = None, actor_role: str = "member") -> dict:
     c = _cycle(session, cycle_id)
+    if actor_id:
+        A.require_circle_access(session, _circle(session, c.circle_id), actor_id, actor_role)
+    rules = _rules(session, c.circle_id, c.ruleset_version)
+    settlement = session.scalar(select(SettlementRow).where(SettlementRow.cycle_id == c.id))
     out = _view_cycle(c)
+    out["currency"] = rules.currency
+    out["payout_mode"] = rules.payout_mode.value
+    out["settlement_id"] = settlement.id if settlement else None
+    out["settlement_status"] = settlement.status if settlement else None
     out["obligations"] = [{"member_id": o.member_id, "gross_due": o.gross_due, "dividend_credit": o.dividend_credit,
+                           "adjustments": o.adjustments,
                            "net_payable": o.gross_due + o.adjustments - o.dividend_credit,
                            "confirmed_paid": o.confirmed_paid,
-                           "outstanding": _mo(o, "INR").outstanding}
+                           "outstanding": _mo(o, rules.currency).outstanding}
                           for o in session.scalars(select(Obligation).where(Obligation.cycle_id == cycle_id))]
     out["transitions"] = [{"from": t.from_state, "to": t.to_state, "actor": t.actor, "reason": t.reason,
                            "at": as_utc(t.at).isoformat()}
@@ -501,7 +536,10 @@ def open_auction(session: Session, cycle_id: str, actor_id: str) -> dict:
 def submit_bid(session: Session, cycle_id: str, actor_id: str, member_id: str, discount_minor: int) -> dict:
     cycle = _cycle(session, cycle_id, lock=True)
     circle = _circle(session, cycle.circle_id)
-    if actor_id not in (member_id, circle.organizer_id):
+    seat = session.get(Member, member_id)
+    if seat is not None and seat.circle_id != circle.id:
+        seat = None                       # the engine rejects it as NOT_ELIGIBLE_MEMBER, traceably
+    if actor_id != circle.organizer_id and not A.acts_for(seat, actor_id) and actor_id != member_id:
         raise Forbidden("a bid may only be placed by the member or the organizer")
     rules = _rules(session, cycle.circle_id, cycle.ruleset_version)
     now = _now()
@@ -524,16 +562,18 @@ def list_bids(session: Session, cycle_id: str, actor_id: str) -> list:
     rules = _rules(session, cycle.circle_id, cycle.ruleset_version)
     sealed_hidden = (rules.payout_mode == PayoutMethod.SEALED_BID_AUCTION
                      and S(cycle.state) in (S.COLLECTIONS_IN_PROGRESS, S.AUCTION_OPEN))
+    seat = A.seat_for(session, circle.id, actor_id)
+    own_ids = {actor_id} | ({seat.id} if seat else set())
     rows = session.scalars(select(BidRow).where(BidRow.cycle_id == cycle_id).order_by(BidRow.submitted_at))
     out = []
     for b in rows:
-        own = b.member_id == actor_id
+        own = b.member_id in own_ids
         if sealed_hidden and not own and actor_id != "system":
             out.append({"bid_id": b.id, "member_id": b.member_id, "accepted": b.accepted, "discount": None,
-                        "sealed": True})
+                        "sealed": True, "submitted_at": as_utc(b.submitted_at).isoformat()})
         else:
             out.append({"bid_id": b.id, "member_id": b.member_id, "discount": b.discount, "accepted": b.accepted,
-                        "reasons": b.reasons})
+                        "reasons": b.reasons, "submitted_at": as_utc(b.submitted_at).isoformat()})
     return out
 
 
@@ -686,8 +726,30 @@ def calculate_cycle_settlement(session: Session, cycle_id: str, actor_id: str) -
     return {**_view_settlement(row), "already_calculated": False}
 
 
-def get_settlement(session: Session, settlement_id: str) -> dict:
-    return _view_settlement(_settlement(session, settlement_id))
+def get_settlement(session: Session, settlement_id: str, actor_id: Optional[str] = None,
+                   actor_role: str = "member") -> dict:
+    row = _settlement(session, settlement_id)
+    if actor_id is None:
+        return _view_settlement(row)
+    cycle = _cycle(session, row.cycle_id)
+    circle = _circle(session, cycle.circle_id)
+    A.require_circle_access(session, circle, actor_id, actor_role)
+    rules = row.data["ruleset"]
+    winner = session.get(Member, row.data["settlement"]["winner_member_id"])
+    approvals = list(session.scalars(select(ApprovalRow).where(ApprovalRow.settlement_id == row.id)
+                                     .order_by(ApprovalRow.id)))
+    last = session.scalar(select(StateTransition).where(StateTransition.cycle_id == cycle.id)
+                          .order_by(StateTransition.id.desc()).limit(1))
+    return {**_view_settlement(row), "circle_id": circle.id, "circle_name": circle.name,
+            "organizer_id": circle.organizer_id, "cycle_number": cycle.number, "cycle_state": cycle.state,
+            "prior_state": cycle.prior_state, "state_reason": last.reason if last else None,
+            "required_approvals": rules.get("required_approvals", 1),
+            "require_security": rules.get("require_security", False),
+            "require_full_collection_before_payout": rules.get("require_full_collection_before_payout", True),
+            "winner_security_status": winner.security_status if winner else None,
+            "approvals": [{"approver_id": a.approver_id, "decision": a.decision, "reason": a.reason,
+                           "created_at": as_utc(a.created_at).isoformat() if a.created_at else None}
+                          for a in approvals]}
 
 
 def _stored(row: SettlementRow):
@@ -702,7 +764,7 @@ def approve_settlement(session: Session, settlement_id: str, actor_id: str, acto
     if actor_id != circle.organizer_id and actor_role != "approver":
         raise Forbidden("only the organizer or a designated approver may approve")
     s, rules = _stored(row)
-    if actor_id == s.winner_member_id:
+    if A.acts_for(session.get(Member, s.winner_member_id), actor_id) or actor_id == s.winner_member_id:
         raise Forbidden("the payout recipient cannot approve their own payout")
     if S(cycle.state) != S.AWAITING_APPROVAL:
         raise Conflict("settlement is not awaiting approval")
@@ -912,9 +974,16 @@ def reconciliation_report(session: Session, settlement_id: str) -> dict:
 
 
 # ---------------------------------------------------------------- ledger, corrections, disputes
-def list_ledger(session: Session, cycle_id: str, cursor: Optional[str] = None, limit: Optional[int] = 50) -> dict:
+def list_ledger(session: Session, cycle_id: str, cursor: Optional[str] = None, limit: Optional[int] = 50,
+                actor_id: Optional[str] = None, actor_role: str = "member") -> dict:
     """Cursor-paginated ledger listing. Never uses OFFSET; pages by (timestamp, id) tuple."""
     q = select(LedgerEventRow).where(LedgerEventRow.cycle_id == cycle_id)
+    if actor_id:
+        from .queries import visible_ledger_filter
+        cycle = _cycle(session, cycle_id)
+        visible = visible_ledger_filter(session, _circle(session, cycle.circle_id), actor_id, actor_role)
+        if visible is not None:
+            q = q.where(visible)
     if cursor:
         ts_str, id_str = cursor.split("|", 1)
         cursor_ts = datetime.fromisoformat(ts_str)
@@ -970,8 +1039,10 @@ def resume_cycle(session: Session, cycle_id: str, actor_id: str, reason: str) ->
     """Leave ON_HOLD/FAILED only by returning to the state recorded when the hold began."""
     cycle = _cycle(session, cycle_id, lock=True)
     _require_organizer(_circle(session, cycle.circle_id), actor_id)
-    if S(cycle.state) not in (S.ON_HOLD,) or not cycle.prior_state:
+    if S(cycle.state) not in (S.ON_HOLD, S.FAILED) or not cycle.prior_state:
         raise Conflict("cycle is not on hold")
+    if not reason or not reason.strip():
+        raise Unprocessable("a recorded reason is required to resume")
     _transition(session, cycle, S(cycle.prior_state), actor_id, reason)
     session.commit()
     return _view_cycle(cycle)
@@ -1083,14 +1154,18 @@ def create_proposal(session: Session, circle_id: str, actor_id: str, kind: str,
     """
     if not _feature_flag(session, "AGENT_PROPOSAL_ENABLED"):
         raise Forbidden("agent proposals are disabled by feature flag")
-    _circle(session, circle_id)
+    circle = _circle(session, circle_id)
+    if not actor_id.startswith("agent:") and actor_id != "system":
+        _require_organizer(circle, actor_id)
+    if kind not in MANDATE_KINDS:
+        raise Unprocessable(f"kind must be one of: {', '.join(MANDATE_KINDS)}")
     _require_proposal_params(params)
     params["kind"] = kind
     proposal = ProposedActionRow(
         id=str(uuid.uuid4()), circle_id=circle_id, kind=kind, params=params,
         rationale=rationale, state="PROPOSED", proposed_by=actor_id, created_at=_now())
     session.add(proposal)
-    session.flush()
+    session.commit()
     return {"proposal_id": proposal.id, "state": "PROPOSED",
             "expires_at": (_now() + timedelta(minutes=expires_in_minutes)).isoformat()}
 
@@ -1119,8 +1194,13 @@ def approve_proposal(session: Session, proposal_id: str, actor_id: str,
     # Tier 2 (§13.4): the payout recipient can never approve their own payout.
     if params.get("kind") == "payout":
         member = session.get(Member, params["member_id"])
-        if member is not None and member.id == actor_id:
+        if A.acts_for(member, actor_id):
             raise Forbidden("the payout recipient cannot approve their own payout")
+    circle = _circle(session, proposal.circle_id)
+    if actor_id != circle.organizer_id:
+        raise Forbidden("only the circle organizer may approve a proposed action")
+    if step_up_method not in ("BIOMETRIC", "OTP"):
+        raise Unprocessable("step-up verification (BIOMETRIC or OTP) is required to approve")
     mandate_id = str(uuid.uuid4())
     idempotency_key = f"mandate:{mandate_id}"
     mandate = AgentMandate(
@@ -1135,13 +1215,16 @@ def approve_proposal(session: Session, proposal_id: str, actor_id: str,
     proposal.state = "APPROVED"
     proposal.decided_by = actor_id
     proposal.decided_at = _now()
-    session.flush()
+    session.commit()
     return {"mandate_id": mandate.id, "idempotency_key": idempotency_key,
             "expires_at": mandate.expires_at.isoformat(), "state": "MANDATE_ISSUED"}
 
 
+MANDATE_KINDS = ("payout", "invoice", "reminder")
+
+
 def execute_mandate(session: Session, mandate_id: str, actor_id: str,
-                    gateway: PayoutGateway) -> dict:
+                    gateway: PayoutGateway, collection_gateway=None) -> dict:
     """Execute a mandate. Takes the id alone — the LLM supplies no execution parameters.
 
     Re-reads params from the DB, verifies hash/expiry/unused/proposal state, recomputes the
@@ -1153,6 +1236,8 @@ def execute_mandate(session: Session, mandate_id: str, actor_id: str,
     mandate = session.get(AgentMandate, mandate_id, with_for_update=True)
     if mandate is None:
         raise NotFound("mandate not found")
+    if actor_id != "system":
+        _require_organizer(_circle(session, mandate.circle_id), actor_id)
     if mandate.state != "MANDATE_ISSUED":
         raise Conflict(f"mandate is {mandate.state}, not executable")
     if _now() > as_utc(mandate.expires_at):
@@ -1187,21 +1272,52 @@ def execute_mandate(session: Session, mandate_id: str, actor_id: str,
             mandate.outcome = {"error": "amount_recompute_mismatch"}
             session.commit()
             raise Conflict("engine recomputed amount does not match mandate params")
+    if mandate.kind in ("invoice", "reminder"):
+        # Collections actions are bound to the obligation's outstanding balance at execution time.
+        ob = session.scalar(select(Obligation).where(Obligation.cycle_id == cycle_id,
+                                                     Obligation.member_id == params["member_id"]))
+        outstanding = _mo(ob, mandate.currency).outstanding if ob else 0
+        if outstanding != amount_minor:
+            mandate.state = "FAILED"
+            mandate.outcome = {"error": "amount_recompute_mismatch", "outstanding_minor": outstanding}
+            session.commit()
+            raise Conflict("the member's outstanding balance changed since approval; propose again")
+    if mandate.kind not in MANDATE_KINDS:
+        raise Unprocessable(f"unsupported mandate kind: {mandate.kind}")
     # Persist intent (single-use consumed) before calling the provider, so a retry cannot
     # double-submit. The provider call itself happens outside the transaction.
     mandate.state = "CONSUMED"
     session.commit()
     try:
+        amount = Money(amount_minor, mandate.currency)
         if mandate.kind == "payout":
             result = gateway.submit_payout(
                 idempotency_key=mandate.idempotency_key,
                 member_id=params["member_id"],
-                amount=Money(amount_minor, mandate.currency),
+                amount=amount,
                 session=session,
             )
+            outcome = {"provider_ref": result.provider_ref, "status": result.status.value}
+        elif mandate.kind == "invoice":
+            cg = collection_gateway or gateway
+            cycle = _cycle(session, cycle_id)
+            base = config.get_env("APP_BASE_URL", "http://localhost:3000")
+            back = f"{base}/app/circles/{cycle.circle_id}/cycles/{cycle.id}"
+            result = cg.create_collection(
+                idempotency_key=mandate.idempotency_key, member_id=params["member_id"], amount=amount,
+                description=f"ChitCircle catch-up contribution, round {cycle.number}",
+                return_url=f"{back}?payment=returned", cancel_url=f"{back}?payment=cancelled",
+                session=session)
+            if result.status == "FAILED":
+                raise Conflict(result.detail or "invoice creation failed")
+            outcome = {"provider_ref": result.provider_ref, "status": result.status,
+                       "approval_url": result.approval_url}
         else:
-            raise Unprocessable(f"unsupported mandate kind: {mandate.kind}")
+            outcome = {"status": "SENT", "channel": "in_app",
+                       "message": params.get("message") or "Friendly reminder: your contribution is due."}
     except Exception as exc:  # noqa: BLE001 - one failed execution must not poison the mandate
+        session.rollback()
+        mandate = session.get(AgentMandate, mandate_id)
         mandate.state = "FAILED"
         mandate.outcome = {"error": f"{type(exc).__name__}: {exc}"}
         session.commit()
@@ -1209,7 +1325,7 @@ def execute_mandate(session: Session, mandate_id: str, actor_id: str,
     mandate.state = "EXECUTED"
     mandate.executed_at = _now()
     mandate.executed_by = actor_id
-    mandate.outcome = {"provider_ref": result.provider_ref, "status": result.status.value}
+    mandate.outcome = outcome
     session.commit()
     return {"outcome": mandate.outcome, "mandate_id": mandate.id}
 
@@ -1227,16 +1343,41 @@ def revoke_mandate(session: Session, mandate_id: str, actor_id: str, reason: Opt
     return {"mandate_id": mandate.id, "state": "REVOKED"}
 
 
+def reject_proposal(session: Session, proposal_id: str, actor_id: str, reason: Optional[str]) -> dict:
+    """Dismiss a proposal. No mandate is issued, so nothing can ever execute from it."""
+    proposal = session.get(ProposedActionRow, proposal_id)
+    if proposal is None:
+        raise NotFound("proposal not found")
+    _require_organizer(_circle(session, proposal.circle_id), actor_id)
+    if proposal.state != "PROPOSED":
+        raise Conflict(f"proposal is already {proposal.state}")
+    proposal.state = "REJECTED"
+    proposal.decided_by, proposal.decided_at = actor_id, _now()
+    if reason:
+        proposal.rationale = f"{proposal.rationale or ''}\n\nRejected: {reason}".strip()
+    session.commit()
+    return {"proposal_id": proposal.id, "state": proposal.state}
+
+
 def list_proposals(session: Session, circle_id: str) -> list:
-    """List proposed actions for a circle (agent proposal queue)."""
+    """List proposed actions for a circle (agent proposal queue), with the mandate each one issued."""
     _circle(session, circle_id)
     rows = list(session.scalars(select(ProposedActionRow)
                                 .where(ProposedActionRow.circle_id == circle_id)
                                 .order_by(ProposedActionRow.created_at.desc())))
-    return [{"id": r.id, "kind": r.kind, "params": r.params, "rationale": r.rationale,
-             "state": r.state, "proposed_by": r.proposed_by,
-             "decided_by": r.decided_by, "decided_at": r.decided_at.isoformat() if r.decided_at else None,
-             "created_at": r.created_at.isoformat()} for r in rows]
+    mandates = {m.proposal_id: m for m in session.scalars(
+        select(AgentMandate).where(AgentMandate.circle_id == circle_id))}
+    out = []
+    for r in rows:
+        m = mandates.get(r.id)
+        out.append({"id": r.id, "kind": r.kind, "params": r.params, "rationale": r.rationale,
+                    "state": r.state, "proposed_by": r.proposed_by,
+                    "decided_by": r.decided_by, "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+                    "created_at": as_utc(r.created_at).isoformat(),
+                    "mandate": None if m is None else {
+                        "id": m.id, "state": m.state, "cap_minor": m.cap_minor,
+                        "expires_at": as_utc(m.expires_at).isoformat(), "outcome": m.outcome}})
+    return out
 
 
 def list_mandates(session: Session, circle_id: str) -> list:
@@ -1247,7 +1388,7 @@ def list_mandates(session: Session, circle_id: str) -> list:
                                 .order_by(AgentMandate.created_at.desc())))
     return [{"id": r.id, "proposal_id": r.proposal_id, "kind": r.kind, "params": r.params,
              "params_hash": r.params_hash, "cap_minor": r.cap_minor, "currency": r.currency,
-             "expires_at": r.expires_at.isoformat(), "state": r.state, "issued_by": r.issued_by,
-             "step_up": r.step_up, "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+             "expires_at": as_utc(r.expires_at).isoformat(), "state": r.state, "issued_by": r.issued_by,
+             "step_up": r.step_up, "executed_at": as_utc(r.executed_at).isoformat() if r.executed_at else None,
              "executed_by": r.executed_by, "outcome": r.outcome,
-             "created_at": r.created_at.isoformat()} for r in rows]
+             "created_at": as_utc(r.created_at).isoformat()} for r in rows]

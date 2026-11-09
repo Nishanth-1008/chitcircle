@@ -1,0 +1,32 @@
+"""link circle members to user accounts
+
+Revision ID: 0004
+Revises: 0003
+Create Date: 2026-11-09 12:00:00.000000
+"""
+from __future__ import annotations
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision = '0004'
+down_revision = '0003'
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    with op.batch_alter_table('members', schema=None) as batch_op:
+        batch_op.add_column(sa.Column('user_id', sa.String(length=36), nullable=True))
+        batch_op.add_column(sa.Column('invite_email', sa.String(length=255), nullable=True))
+        batch_op.create_index(batch_op.f('ix_members_user_id'), ['user_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_members_invite_email'), ['invite_email'], unique=False)
+
+
+def downgrade() -> None:
+    with op.batch_alter_table('members', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_members_invite_email'))
+        batch_op.drop_index(batch_op.f('ix_members_user_id'))
+        batch_op.drop_column('invite_email')
+        batch_op.drop_column('user_id')
