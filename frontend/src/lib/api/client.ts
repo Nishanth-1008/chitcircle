@@ -7,15 +7,16 @@ export interface ApiContext {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
 }
 
 /**
  * One typed entry point for every backend call.
- * - Live: same-origin /api/backend/* (proxied by Next to FastAPI; no secrets in the browser).
- * - Demo: fixtures that mimic the read endpoints and are always labelled as demo data in the UI.
+ * - All calls go to the same-origin /api/backend/* proxy (no demo mode, no demo fixtures).
+ * - State-changing methods (POST/PUT/PATCH/DELETE) send an Idempotency-Key so the
+ *   backend can deduplicate retries. Read-only GET calls do not.
  * The X-Actor-* headers are the backend's development auth stub. They are sent for identification only and are
  * NEVER used by this client as proof of permission.
  */
@@ -23,15 +24,19 @@ export async function request<T>(ctx: ApiContext, path: string, opts: RequestOpt
   if (opts.signal?.aborted) throw new ApiError('aborted', 0, 'Request cancelled');
   if (!ctx.actor) throw new ApiError('unauthorized', 401, 'Sign in to continue.');
 
+  const method = opts.method ?? 'GET';
+  const isStateChanging = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
-      method: opts.method ?? 'GET',
+      method,
       signal: opts.signal,
       cache: 'no-store',
       headers: {
         Accept: 'application/json',
         ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(isStateChanging ? { 'Idempotency-Key': crypto.randomUUID() } : {}),
         'X-Actor-Id': ctx.actor.id,
         'X-Actor-Role': ctx.actor.role,
       },
