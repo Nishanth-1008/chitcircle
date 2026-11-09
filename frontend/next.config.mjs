@@ -10,7 +10,7 @@ const nextConfig = {
   poweredByHeader: false,
   async rewrites() {
     if (!backend) return [];
-    return ['health', 'circles', 'cycles', 'settlements', 'ledger'].flatMap((p) => [
+    return ['health', 'circles', 'cycles', 'settlements', 'ledger', 'collections', 'proposed-actions', 'mandates'].flatMap((p) => [
       { source: `/api/backend/${p}`, destination: `${backend}/${p}` },
       { source: `/api/backend/${p}/:path*`, destination: `${backend}/${p}/:path*` },
     ]);

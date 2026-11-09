@@ -7,7 +7,8 @@
  */
 import { request, type ApiContext } from './client';
 import type {
-  BidView, CircleView, CycleView, HealthView, LedgerEventView, ReconciliationView, SettlementView,
+  AgentMandateView, BidView, CircleView, CycleView, HealthView, LedgerEventView,
+  ProposedActionView, ReconciliationView, SettlementView,
 } from '../types';
 
 const id = encodeURIComponent;
@@ -62,4 +63,35 @@ export const api = {
     request(ctx, `/circles/${id(circleId)}/members/${id(memberId)}/security`, {
       method: 'PUT', body: { status }, signal
     }),
+
+  // ---------------------------------------------------------------- agent mandates (Phase 10)
+  listProposals: (ctx: ApiContext, circleId: string, signal?: AbortSignal) =>
+    request<ProposedActionView[]>(ctx, `/circles/${id(circleId)}/proposed-actions`, { signal }),
+
+  createProposal: (ctx: ApiContext, circleId: string, data: {
+    kind: string; params: Record<string, unknown>; rationale?: string; expires_in_minutes?: number
+  }, signal?: AbortSignal) =>
+    request<{ proposal_id: string; state: string; expires_at: string }>(
+      ctx, `/circles/${id(circleId)}/proposed-actions`, { method: 'POST', body: data, signal }
+    ),
+
+  approveProposal: (ctx: ApiContext, proposalId: string, data: {
+    step_up_method: string; step_up_evidence?: Record<string, unknown>; cap_minor?: number
+  }, signal?: AbortSignal) =>
+    request<{ mandate_id: string; idempotency_key: string; expires_at: string; state: string }>(
+      ctx, `/proposed-actions/${id(proposalId)}/approve`, { method: 'POST', body: data, signal }
+    ),
+
+  executeMandate: (ctx: ApiContext, mandateId: string, signal?: AbortSignal) =>
+    request<{ outcome: Record<string, unknown>; mandate_id: string }>(
+      ctx, `/mandates/${id(mandateId)}/execute`, { method: 'POST', signal }
+    ),
+
+  revokeMandate: (ctx: ApiContext, mandateId: string, data: { reason?: string }, signal?: AbortSignal) =>
+    request<{ mandate_id: string; state: string }>(
+      ctx, `/mandates/${id(mandateId)}/revoke`, { method: 'POST', body: data, signal }
+    ),
+
+  listMandates: (ctx: ApiContext, circleId: string, signal?: AbortSignal) =>
+    request<AgentMandateView[]>(ctx, `/circles/${id(circleId)}/mandates`, { signal }),
 };

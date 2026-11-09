@@ -156,3 +156,33 @@ export interface ReconciliationView {
 }
 
 export interface HealthView { status: string }
+
+export interface ProposedActionView {
+  id: string;
+  kind: string;
+  params: Record<string, unknown>;
+  rationale: string | null;
+  state: string;
+  proposed_by: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  created_at: string;
+}
+
+export interface AgentMandateView {
+  id: string;
+  proposal_id: string;
+  kind: string;
+  params: Record<string, unknown>;
+  params_hash: string;
+  cap_minor: number;
+  currency: string;
+  expires_at: string;
+  state: string;
+  issued_by: string;
+  step_up: Record<string, unknown> | null;
+  executed_at: string | null;
+  executed_by: string | null;
+  outcome: Record<string, unknown> | null;
+  created_at: string;
+}
