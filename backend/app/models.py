@@ -95,6 +95,9 @@ class Member(Base):
     position: Mapped[int] = mapped_column(Integer)
     security_status: Mapped[str] = mapped_column(String(20), default="NONE")
     has_won: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The account that holds this seat. NULL until the invited person registers (matched on invite_email).
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    invite_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
 
 
 class Cycle(Base):
