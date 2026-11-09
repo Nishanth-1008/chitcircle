@@ -300,42 +300,61 @@ pip install -r requirements.txt
 pytest
 
 # Configure environment and run development server
-cp .env.example .env
+cp .env.example .env     # then set JWT_SECRET_KEY and ENCRYPTION_KEY (generator commands are in the file)
 uvicorn app.main:app --reload --port 8000
 ```
-Interactive OpenAPI documentation is available at `http://localhost:8000/docs`.
+Interactive OpenAPI documentation is available at `http://localhost:8000/docs`. With `DATABASE_URL=sqlite:///./chitcircle.db`
+no database server is needed; the schema (including newer nullable columns) is created on startup.
 
 ### 3. Frontend (Next.js 15 App)
 
 ```bash
 cd frontend
-
-# Install dependencies
+cp .env.example .env.local   # CHITCIRCLE_API_URL=http://localhost:8000
 npm install
-
-# Run the test suite (64+ tests)
 npm test
-
-# Start the Next.js dev server (runs in standalone demo mode or connected to backend)
 npm run dev
 ```
-Open `http://localhost:3000` in your browser. Demo mode operates out-of-the-box without requiring a running backend.
+Open `http://localhost:3000`, create an account, and create a circle. Invite members by email; when they register
+with that email they are linked to their seat automatically.
 
-To connect the frontend to the live backend:
-1. Copy `.env.example` to `.env.local` in `frontend/`.
-2. Ensure `CHITCIRCLE_API_URL=http://localhost:8000` is set.
-3. Access `/sign-in` (dev mode) and supply an actor ID (e.g. `organizer_1`).
+### 4. Walking a round end to end (sandbox)
+
+1. Organizer: **Start round** (pick a past due date to see overdue behaviour) → **Open the auction** (auction circles)
+   or **Select recipient** (rotation / lottery).
+2. Members: place a bid from the round page; the bid advisor shows what each discount means, computed by the engine.
+3. Organizer: **Close auction** → **Calculate settlement**. Installments are now final (dividends applied).
+4. Members pay: **Pay with PayPal** (sends a real PayPal sandbox invoice when credentials are set and the circle
+   currency is supported) or **Simulate confirmed payment** (sandbox provider event through the real pipeline).
+5. Organizer: **Approve settlement** → **Release payout** → confirmation (PayPal webhook, status check, or
+   **Simulate provider confirmation**) → **Finalize round** after the three-way reconciliation passes.
+6. Overdue members: **Approvals → Run collections agent**, approve a proposal with step-up, then **Run now**.
+
+PayPal sandbox notes: Invoicing does not accept INR (use USD etc. for real invoices), and the Payouts API must be
+enabled on the sandbox app; otherwise payouts fail with a recorded reason and the round can be resumed.
+Webhooks (`POST /webhooks/provider`) understand PayPal `INVOICING.INVOICE.PAID` and `PAYMENT.PAYOUTS-ITEM.*`
+events but need a public URL; locally, use the sandbox simulation.
 
 ---
 
 ## API Lifecycle Walkthrough
 
+Every state-changing request needs an `Idempotency-Key` header (except `/auth/*` and `/webhooks/*`). The web client
+authenticates with a JWT (`POST /auth/register` or `/auth/login`, then `Authorization: Bearer …`); the examples
+below use the development header stub (`X-Actor-*`, disabled in production) for brevity.
+
+Additional endpoints used by the web client: `GET /auth/me`, `POST /auth/refresh`, `PUT /auth/me/payout-email`,
+`GET /config`, `GET /circles` (my circles), `GET /circles/{id}/cycles`, `GET /circles/{id}/ledger` (cursor),
+`GET /cycles/{id}/auction/preview` (bid advisor), `GET /cycles/{id}/members/{m}/explanation` (explainer),
+`POST /circles/{id}/agents/collections/run`, `POST /proposed-actions/{id}/reject`,
+`POST /sandbox/cycles/{id}/payments`, `POST /sandbox/settlements/{id}/payout` (non-production only).
+
 ```bash
-# 1. Create a Circle with versioned ruleset and members
+# 1. Create a Circle with versioned ruleset and members (strings are names; objects can invite by email)
 curl -X POST http://localhost:8000/circles \
-  -H "X-Actor-Id: org_1" -H "X-Actor-Role: organizer" \
+  -H "X-Actor-Id: org_1" -H "X-Actor-Role: organizer" -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
-  -d '{"name": "Savings Circle A", "ruleset": {...}, "members": ["m1", "m2", "m3"]}'
+  -d '{"name": "Savings Circle A", "ruleset": {...}, "members": ["m1", {"email": "m2@example.com"}, "m3"]}'
 
 # 2. Open a Cycle and issue contribution obligations
 curl -X POST http://localhost:8000/circles/{circle_id}/cycles \
@@ -391,7 +410,8 @@ In accordance with Section 20 of the specification, all ambiguous policy decisio
 
 ## Known Limitations & Roadmap
 
-- **Authentication:** API uses JWT with `jwt_secret_key()` required (no insecure default); `X-Actor-Id`/`X-Actor-Role` stub disabled in production (`allow_actor_headers()` returns `False`). Production still requires OIDC + phone OTP.
+- **Authentication:** The web app uses email + password JWT sessions (PBKDF2 hashes, sliding refresh). `X-Actor-Id`/`X-Actor-Role` stub disabled in production. Production still requires OIDC + phone OTP; the approval step-up code is a sandbox stand-in for OTP/biometrics.
+- **Circle roles:** Seats link to accounts (`members.user_id`); organizer is per circle. Designated approvers are still a global `approver` account role (development-only self-service).
 - **Alembic Migrations:** Database schemas are currently generated via SQLAlchemy `create_all` on startup. Alembic directory exists (`backend/alembic/`) but no baseline migration is applied at startup yet.
 - **Implementation Status:**
   - **Done:** Core financial engine (integer minor-unit money, explicit rounding), 12+ financial invariants, append-only double-entry ledger, cycle state machine with resume-from-hold, sealed-bid hiding, commit-reveal lottery, settlement invariant checker, two-phase webhook ingestion pipeline, `Money.to_major_string()` currency-exponent-safe serialization, verified contact resolution (`user_contacts` + `resolve_contact_email`), RFC 9457 problem-details handlers, `/v1` versioned prefix, cursor-paginated ledger, HTTP idempotency middleware, X-Actor stub off in production, `jwt_secret_key()` required, CI on PostgreSQL 16 with per-test truncation isolation.

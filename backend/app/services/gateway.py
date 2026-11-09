@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import time
+import zlib
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Protocol
@@ -77,9 +78,12 @@ def resolve_contact_email(session: Session, member_id: str) -> Optional[str]:
     contact at the edge (§10.10, gap #10). Returns None when no verified
     email contact exists for the member, so callers can fall back.
     """
+    from ..models import Member
+    member = session.get(Member, member_id)
+    user_id = member.user_id if member is not None and member.user_id else member_id
     contact = session.scalar(
         select(UserContact).where(
-            UserContact.user_id == member_id,
+            UserContact.user_id == user_id,
             UserContact.kind == "email",
             UserContact.verified.is_(True),
         )
@@ -102,8 +106,9 @@ class MockGateway:
             return self.submissions[idempotency_key]
         if self.mode == "timeout":
             return PayoutResult(PayoutStatus.UNKNOWN, None, "provider timeout")
-        res = (PayoutResult(PayoutStatus.FAILED, None, "rejected") if self.mode == "fail"
-               else PayoutResult(PayoutStatus.SUBMITTED, f"mock-{len(self.submissions) + 1}"))
+        if self.mode == "fail":
+            return PayoutResult(PayoutStatus.FAILED, None, "rejected")   # a rejected request creates nothing
+        res = PayoutResult(PayoutStatus.SUBMITTED, f"mock-{len(self.submissions) + 1}")
         self.submissions[idempotency_key] = res
         return res
 
@@ -172,6 +177,21 @@ class _TokenCache:
 _token_cache = _TokenCache()
 
 
+def _paypal_error(body: str) -> str:
+    """Short, human-readable reason from a PayPal error body (never the raw payload)."""
+    try:
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001 - non-JSON error bodies
+        return "unexpected response"
+    details = data.get("details") or []
+    first = details[0] if details and isinstance(details[0], dict) else {}
+    reason = first.get("description") or first.get("issue") or data.get("message") or data.get("name") \
+        or data.get("error") or "unknown error"
+    if "Currency Code is not valid" in reason:
+        reason += " PayPal does not support this currency here (INR invoicing is unavailable); use e.g. USD"
+    return reason[:300]
+
+
 class PayPalGateway:
     """Real PayPal Sandbox gateway for collections and payouts."""
 
@@ -219,7 +239,17 @@ class PayPalGateway:
 
     # --- Collection (Invoice) ---
 
-    def create_collection(
+    def create_collection(self, **kwargs) -> CollectionResult:
+        """Create a PayPal invoice for a contribution; provider errors come back as a FAILED result."""
+        try:
+            return self._create_invoice(**kwargs)
+        except httpx.HTTPStatusError as e:
+            return CollectionResult("FAILED", None, None,
+                                    f"PayPal rejected the invoice ({e.response.status_code}: {_paypal_error(e.response.text)})")
+        except httpx.HTTPError:
+            return CollectionResult("FAILED", None, None, "PayPal did not respond; try again")
+
+    def _create_invoice(
         self,
         *,
         idempotency_key: str,
@@ -230,7 +260,7 @@ class PayPalGateway:
         cancel_url: str,
         session: Optional[Session] = None,
     ) -> CollectionResult:
-        """Create a PayPal invoice for member contribution collection."""
+        """Create and send a PayPal invoice for member contribution collection."""
         # PayPal Invoicing API v2
         # https://developer.paypal.com/docs/api/invoicing/v2/
 
@@ -245,64 +275,44 @@ class PayPalGateway:
             if not payer_email:
                 return CollectionResult("FAILED", None, None, "no verified email contact for member")
 
+        invoice_id, payer_url = self._send_invoice(idempotency_key, payer_email, amount,
+                                                   "ChitCircle contribution", description)
+        return CollectionResult(status="CREATED", provider_ref=invoice_id, approval_url=payer_url,
+                                detail="Invoice sent to payer")
+
+    def _send_invoice(self, idempotency_key: str, recipient_email: Optional[str], amount: Money,
+                      item_name: str, note: str) -> tuple[str, str]:
+        """Create and send a PayPal v2 invoice. `detail.reference` carries our key so the PAID webhook maps back.
+
+        The invoicer is the PayPal account behind the API credentials, so no `invoicer` block is sent.
+        PayPal-Request-Id makes both calls safe to retry.
+        """
+        currency = amount.currency
         invoice = {
-            "detail": {
-                "currency_code": currency,
-                "reference": idempotency_key,
-                "note": description,
-                "term": "DueOnReceipt",
-            },
-            "invoicer": {
-                "name": "ChitCircle",
-                "email": "noreply@chitcircle.example",
-            },
-            "primary_recipients": [
-                {"email": payer_email}
-            ],
-            "items": [
-                {
-                    "name": "Chit Circle Contribution",
-                    "description": description,
-                    "quantity": "1",
-                    "unit_amount": {"currency_code": currency, "value": amount_str},
-                }
-            ],
+            "detail": {"currency_code": currency, "reference": idempotency_key, "note": note[:4000],
+                       "payment_term": {"term_type": "DUE_ON_RECEIPT"}},
+            "primary_recipients": [{"billing_info": {"email_address": recipient_email}}] if recipient_email else [],
+            "items": [{"name": item_name, "description": note[:1000], "quantity": "1",
+                       "unit_amount": {"currency_code": currency, "value": amount.to_major_string()}}],
         }
-
-        headers = self._headers(idempotency_key)
-
         with httpx.Client(timeout=30.0) as client:
-            # Create draft invoice
-            resp = client.post(f"{self.base_url}/v2/invoicing/invoices", headers=headers, json=invoice)
-
-            if resp.status_code == 422 and "DUPLICATE_INVOICE_ID" in resp.text:
-                # Idempotency: invoice already exists, get it
-                resp = client.get(f"{self.base_url}/v2/invoicing/invoices/{idempotency_key}", headers=headers)
-                resp.raise_for_status()
-                invoice_data = resp.json()
-            else:
-                resp.raise_for_status()
-                invoice_data = resp.json()
-
-            invoice_id = invoice_data["id"]
-
-            # Send invoice (moves from DRAFT to SENT)
-            resp = client.post(
-                f"{self.base_url}/v2/invoicing/invoices/{invoice_id}/send",
-                headers=headers,
-                json={"send_to_invoicer": False, "send_to_recipient": True}
-            )
+            resp = client.post(f"{self.base_url}/v2/invoicing/invoices",
+                               headers={**self._headers(idempotency_key), "Prefer": "return=representation"},
+                               json=invoice)
             resp.raise_for_status()
-
-            # Get the invoice link for the payer
-            approval_url = f"https://www.sandbox.paypal.com/invoice/payerView/detail/{invoice_id}"
-
-            return CollectionResult(
-                status="CREATED",
-                provider_ref=invoice_id,
-                approval_url=approval_url,
-                detail="Invoice sent to payer",
-            )
+            data = resp.json()
+            invoice_id = data.get("id") or data.get("href", "").rstrip("/").rsplit("/", 1)[-1]
+            resp = client.post(f"{self.base_url}/v2/invoicing/invoices/{invoice_id}/send",
+                               headers=self._headers(f"{idempotency_key}:send"),
+                               json={"send_to_invoicer": False, "send_to_recipient": bool(recipient_email)})
+            resp.raise_for_status()
+            try:
+                sent = resp.json()      # PayPal may answer 202 with an empty body
+            except ValueError:
+                sent = {}
+        payer_url = sent.get("href") or ((data.get("detail") or {}).get("metadata") or {}).get("recipient_view_url") \
+            or f"https://www.sandbox.paypal.com/invoice/p/#{invoice_id}"
+        return invoice_id, payer_url
 
     # --- Payout ---
 
@@ -312,16 +322,25 @@ class PayPalGateway:
         Submit a payout to the winner.
         Uses PayPal Payouts API if available, otherwise falls back to invoice to winner.
         """
-        # Try Payouts API first
         try:
             return self._submit_payouts_api(idempotency_key, member_id, amount, session=session)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403 and "PAYOUTS_NOT_ENABLED" in e.response.text:
-                # Fallback: create invoice/order to winner
-                return self._fallback_invoice_to_winner(idempotency_key, member_id, amount, session=session)
-            raise
+            code, body = e.response.status_code, e.response.text
+            if code in (401, 403) or "PAYOUTS_NOT_ENABLED" in body:
+                # Payouts isn't enabled for this PayPal app: use the disclosed demo fallback.
+                try:
+                    return self._fallback_invoice_to_winner(idempotency_key, member_id, amount, session=session)
+                except httpx.HTTPStatusError as fe:
+                    return PayoutResult(PayoutStatus.FAILED, None,
+                                        f"PayPal Payouts is not enabled for this app and the invoice fallback was "
+                                        f"rejected ({fe.response.status_code}: {_paypal_error(fe.response.text)})")
+                except httpx.HTTPError:
+                    return PayoutResult(PayoutStatus.UNKNOWN, None, "payout fallback did not respond")
+            if 400 <= code < 500:
+                return PayoutResult(PayoutStatus.FAILED, None, f"PayPal rejected the payout ({code}: {_paypal_error(body)})")
+            return PayoutResult(PayoutStatus.UNKNOWN, None, f"PayPal error {code}; status unknown")
         except Exception:
-            # Any other error -> UNKNOWN, will be retried
+            # timeouts and transport errors: neither success nor failure, resolved by the status check
             return PayoutResult(PayoutStatus.UNKNOWN, None, "payout submission failed")
 
     def _submit_payouts_api(self, idempotency_key: str, member_id: str, amount: Money,
@@ -376,11 +395,6 @@ class PayPalGateway:
         The winner "pays" the invoice which transfers money from organizer to winner.
         This is a workaround when Payouts API is not enabled.
         """
-        # Create invoice where organizer is invoicer and winner is recipient
-        # When winner "pays", money moves from organizer's PayPal to winner's PayPal
-        amount_str = amount.to_major_string()
-        currency = amount.currency
-
         # Resolve the winner's verified contact at the edge (gap #10).
         # Only enforced when a DB session is provided (API path); direct calls skip it.
         recipient_email = None
@@ -389,58 +403,13 @@ class PayPalGateway:
             if not recipient_email:
                 return PayoutResult(PayoutStatus.FAILED, None, "no verified email contact for member")
 
-        invoice = {
-            "detail": {
-                "currency_code": currency,
-                "reference": idempotency_key,
-                "note": "Chit Circle winnings payout",
-                "term": "DueOnReceipt",
-            },
-            "invoicer": {
-                "name": "ChitCircle Organizer",
-                "email": "organizer@chitcircle.example",
-            },
-            "primary_recipients": [
-                {"email": recipient_email}
-            ],
-            "items": [
-                {
-                    "name": "Chit Circle Payout",
-                    "description": "Your winnings from the chit circle",
-                    "quantity": "1",
-                    "unit_amount": {"currency_code": currency, "value": amount_str},
-                }
-            ],
-        }
-
-        headers = self._headers(idempotency_key)
-
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(f"{self.base_url}/v2/invoicing/invoices", headers=headers, json=invoice)
-
-            if resp.status_code == 422 and "DUPLICATE_INVOICE_ID" in resp.text:
-                resp = client.get(f"{self.base_url}/v2/invoicing/invoices/{idempotency_key}", headers=headers)
-                resp.raise_for_status()
-                invoice_data = resp.json()
-            else:
-                resp.raise_for_status()
-                invoice_data = resp.json()
-
-            invoice_id = invoice_data["id"]
-
-            # Send to winner
-            resp = client.post(
-                f"{self.base_url}/v2/invoicing/invoices/{invoice_id}/send",
-                headers=headers,
-                json={"send_to_invoicer": False, "send_to_recipient": True}
-            )
-            resp.raise_for_status()
-
-            return PayoutResult(
-                status=PayoutStatus.SUBMITTED,
-                provider_ref=invoice_id,
-                detail="Payout modeled as invoice to winner (Payouts API not available)",
-            )
+        invoice_id, _ = self._send_invoice(idempotency_key, recipient_email, amount, "ChitCircle payout",
+                                           "Circle payout record (sandbox fallback: PayPal Payouts is not enabled)")
+        return PayoutResult(
+            status=PayoutStatus.SUBMITTED,
+            provider_ref=invoice_id,
+            detail="Payout modeled as an invoice record because PayPal Payouts is not enabled; no money moved",
+        )
 
     def lookup_payout(self, idempotency_key: str) -> PayoutResult:
         """Check payout status."""
@@ -514,17 +483,21 @@ class PayPalWebhookVerifier:
     def verify(self, body: bytes, headers: dict) -> bool:
         """Verify the webhook signature."""
         try:
-            transmission_id = headers.get("PAYPAL-TRANSMISSION-ID")
-            transmission_time = headers.get("PAYPAL-TRANSMISSION-TIME")
-            transmission_sig = headers.get("PAYPAL-TRANSMISSION-SIG")
-            cert_url = headers.get("PAYPAL-CERT-URL")
-            auth_algo = headers.get("PAYPAL-AUTH-ALGO", "SHA256withRSA")
+            h = {k.lower(): v for k, v in headers.items()}      # ASGI header names arrive lower-cased
+            transmission_id = h.get("paypal-transmission-id")
+            transmission_time = h.get("paypal-transmission-time")
+            transmission_sig = h.get("paypal-transmission-sig")
+            cert_url = h.get("paypal-cert-url")
+            auth_algo = h.get("paypal-auth-algo", "SHA256withRSA")
 
             if not all([transmission_id, transmission_time, transmission_sig, cert_url]):
                 return False
+            if not cert_url.startswith(("https://api.paypal.com/", "https://api.sandbox.paypal.com/",
+                                        "https://api-m.paypal.com/", "https://api-m.sandbox.paypal.com/")):
+                return False
 
-            # Construct the message that was signed
-            message = f"{transmission_id}|{transmission_time}|{self.webhook_id}|{hashlib.sha256(body).hexdigest()}"
+            # PayPal signs transmission_id|time|webhook_id|crc32(body) (decimal CRC32 of the raw body).
+            message = f"{transmission_id}|{transmission_time}|{self.webhook_id}|{zlib.crc32(body)}"
 
             # Get certificate
             cert = self._get_certificate(cert_url)
@@ -581,11 +554,22 @@ _collection_gateway: CollectionGateway | None = None
 _webhook_verifier: PayPalWebhookVerifier | None = None
 
 
+def _paypal_enabled() -> bool:
+    """PAYMENT_GATEWAY=mock forces the mock even when PayPal credentials are present."""
+    from ..config import get_env
+    if (get_env("PAYMENT_GATEWAY") or "").strip().lower() == "mock":
+        return False
+    return bool(paypal_client_id())
+
+
+def gateway_name() -> str:
+    return "paypal" if isinstance(get_gateway(), PayPalGateway) else "mock"
+
+
 def get_gateway() -> PayoutGateway:
     global _gateway
     if _gateway is None:
-        client_id = paypal_client_id()
-        if client_id:
+        if _paypal_enabled():
             try:
                 _gateway = PayPalGateway()
             except Exception:
@@ -598,8 +582,7 @@ def get_gateway() -> PayoutGateway:
 def get_collection_gateway() -> CollectionGateway:
     global _collection_gateway
     if _collection_gateway is None:
-        client_id = paypal_client_id()
-        if client_id:
+        if _paypal_enabled():
             try:
                 _collection_gateway = PayPalGateway()
             except Exception:

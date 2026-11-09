@@ -17,7 +17,12 @@ from financial_engine.reconciliation import HmacVerifier
 
 from .. import config, schemas
 from ..db import get_session, get_read_session
+from ..services import accounts as A
+from ..services import agents as agents_svc
 from ..services import financial_service as svc
+from ..services import paypal_events
+from ..services import queries as Q
+from ..services import sandbox as sandbox_svc
 from ..services.read_models import get_circle_timeline, get_circle_dashboard, get_member_view
 from ..services.gateway import (
     PayoutGateway, get_gateway, CollectionGateway, get_collection_gateway, get_webhook_verifier
@@ -36,8 +41,9 @@ def login(
     session: Session = Depends(get_session),
 ):
     """Login endpoint - returns JWT access token."""
+    from sqlalchemy import func
     from ..models import User
-    user = session.query(User).filter(User.email == form_data.username).first()
+    user = session.query(User).filter(func.lower(User.email) == form_data.username.strip().lower()).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -49,29 +55,46 @@ def login(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user",
         )
+    A.link_pending_seats(session, user)
+    return _token_response(session, user)
+
+
+def _token_response(session: Session, user) -> dict:
     access_token = create_access_token(data={"sub": user.id, "role": user.role})
-    return {"access_token": access_token, "token_type": "bearer", "user_id": user.id, "role": user.role}
+    return {"access_token": access_token, "token_type": "bearer", "user_id": user.id, "role": user.role,
+            "expires_in": config.jwt_expiration_minutes() * 60, "user": A.user_view(session, user)}
 
 
 @router.post("/auth/register", status_code=201)
-def register(
-    email: str,
-    password: str,
-    name: str,
-    role: str = "member",
-    session: Session = Depends(get_session),
-):
-    """Register a new user (for demo purposes)."""
+def register(body: schemas.RegisterIn, session: Session = Depends(get_session)):
+    """Create an account. Seats an organizer reserved for this email are linked automatically."""
+    user = A.register_user(session, body.email, body.password, body.name, body.role)
+    return _token_response(session, user)
+
+
+@router.get("/auth/me")
+def me(a=Depends(get_current_actor), s: Session = Depends(get_session)):
     from ..models import User
-    existing = session.query(User).filter(User.email == email).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
-        )
-    user = create_user(session, email, password, name, role)
-    access_token = create_access_token(data={"sub": user.id, "role": user.role})
-    return {"access_token": access_token, "token_type": "bearer", "user_id": user.id, "role": user.role}
+    user = s.get(User, a.id)
+    if user is None:
+        return {"id": a.id, "email": None, "name": a.id, "role": a.role, "payout_email": None,
+                "payout_email_verified": False}
+    return A.user_view(s, user)
+
+
+@router.post("/auth/refresh")
+def refresh(a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    """Exchange a still-valid token for a fresh one (sliding session)."""
+    from ..models import User
+    user = s.get(User, a.id)
+    if user is None or a.method != "jwt":
+        raise HTTPException(status_code=401, detail="a valid bearer token is required")
+    return _token_response(s, user)
+
+
+@router.put("/auth/me/payout-email")
+def set_payout_email(body: schemas.ContactIn, a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    return A.set_payout_contact(s, a.id, body.email)
 
 
 @router.get("/health")
@@ -79,14 +102,47 @@ def health():
     return {"status": "ok"}
 
 
+@router.get("/config")
+def public_config():
+    """What the client may offer: sandbox simulation tools and which payment gateway is active."""
+    from ..services.gateway import gateway_name
+    return {"environment": config.app_env(), "sandbox_tools": config.sandbox_tools_enabled(),
+            "payment_gateway": gateway_name()}
+
+
+@router.get("/circles")
+def my_circles(a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    """Circles the caller organizes or holds a seat in, with the current round's status."""
+    return Q.list_my_circles(s, a.id)
+
+
 @router.post("/circles", status_code=201)
 def create_circle(body: schemas.CreateCircle, a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    return svc.create_circle(s, a.id, body.name, body.ruleset, body.members)
+    members = [m if isinstance(m, str) else m.model_dump() for m in body.members]
+    return svc.create_circle(s, a.id, body.name, body.ruleset, members)
 
 
 @router.get("/circles/{circle_id}")
 def get_circle(circle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    return svc.get_circle(s, circle_id)
+    return svc.get_circle(s, circle_id, a.id, a.role)
+
+
+@router.get("/circles/{circle_id}/cycles")
+def list_cycles(circle_id: str, a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    return Q.list_cycles(s, circle_id, a.id, a.role)
+
+
+@router.get("/circles/{circle_id}/ledger")
+def circle_ledger(circle_id: str, cursor: Optional[str] = None, limit: int = 50, cycle_id: Optional[str] = None,
+                  member_id: Optional[str] = None, a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    return Q.circle_ledger(s, circle_id, a.id, a.role, cursor=cursor, limit=limit, cycle_id=cycle_id,
+                           member_id=member_id)
+
+
+@router.post("/circles/{circle_id}/agents/collections/run")
+def run_collections_agent(circle_id: str, a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    """Collections agent: scan open obligations and propose reminders / catch-up invoices for approval."""
+    return agents_svc.run_collections_agent(s, circle_id, a.id)
 
 
 @router.post("/circles/{circle_id}/rulesets", status_code=201)
@@ -102,7 +158,19 @@ def security(circle_id: str, member_id: str, body: schemas.SecurityIn, a = Depen
 
 @router.get("/circles/{circle_id}/members/{member_id}/risk")
 def risk(circle_id: str, member_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
+    _require_self_or_organizer(s, circle_id, member_id, a)
     return svc.member_risk(s, circle_id, member_id)
+
+
+def _require_self_or_organizer(s: Session, circle_id: str, member_id: str, a) -> None:
+    """Private member data (risk, member view) is for the member and the organizer only."""
+    from ..errors import Forbidden
+    from ..models import Member
+    circle = svc._circle(s, circle_id)
+    if circle.organizer_id == a.id or a.role == "approver":
+        return
+    if not A.acts_for(s.get(Member, member_id), a.id):
+        raise Forbidden("this is private to the member and the organizer")
 
 
 @router.post("/circles/{circle_id}/cycles", status_code=201)
@@ -112,7 +180,20 @@ def new_cycle(circle_id: str, body: schemas.NewCycle, a = Depends(get_current_ac
 
 @router.get("/cycles/{cycle_id}")
 def get_cycle(cycle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    return svc.get_cycle(s, cycle_id)
+    return svc.get_cycle(s, cycle_id, a.id, a.role)
+
+
+@router.get("/cycles/{cycle_id}/members/{member_id}/explanation")
+def explain(cycle_id: str, member_id: str, a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    """Explainer: plain-language breakdown of a member's installment, built from stored engine output."""
+    return agents_svc.explain_installment(s, cycle_id, member_id, a.id, a.role)
+
+
+@router.get("/cycles/{cycle_id}/auction/preview")
+def bid_preview(cycle_id: str, member_id: str, discount: int, a=Depends(get_current_actor),
+                s: Session = Depends(get_session)):
+    """Bid advisor: what a discount would mean for the bidder, computed by the settlement engine."""
+    return agents_svc.bid_preview(s, cycle_id, member_id, discount, a.id)
 
 
 @router.post("/cycles/{cycle_id}/open")
@@ -132,6 +213,8 @@ def bid(cycle_id: str, body: schemas.BidIn, a = Depends(get_current_actor), s: S
 
 @router.get("/cycles/{cycle_id}/auction/bids")
 def bids(cycle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
+    cycle = svc._cycle(s, cycle_id)
+    A.require_circle_access(s, svc._circle(s, cycle.circle_id), a.id, a.role)
     return svc.list_bids(s, cycle_id, a.id)
 
 
@@ -158,7 +241,7 @@ def calc_settlement(cycle_id: str, a = Depends(get_current_actor), s: Session = 
 @router.get("/cycles/{cycle_id}/ledger")
 def ledger(cycle_id: str, cursor: Optional[str] = None, limit: Optional[int] = 50,
            a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    return svc.list_ledger(s, cycle_id, cursor=cursor, limit=limit)
+    return svc.list_ledger(s, cycle_id, cursor=cursor, limit=limit, actor_id=a.id, actor_role=a.role)
 
 
 @router.post("/cycles/{cycle_id}/resume")
@@ -168,6 +251,7 @@ def resume(cycle_id: str, body: schemas.ReasonIn, a = Depends(get_current_actor)
 
 @router.post("/cycles/{cycle_id}/disputes")
 def dispute(cycle_id: str, body: schemas.ReasonIn, a = Depends(get_current_actor), s: Session = Depends(get_session)):
+    A.require_circle_access(s, svc._circle(s, svc._cycle(s, cycle_id).circle_id), a.id, a.role)
     return svc.open_dispute(s, cycle_id, a.id, body.reason)
 
 
@@ -178,7 +262,7 @@ def resolve(cycle_id: str, body: schemas.ReasonIn, a = Depends(get_current_actor
 
 @router.get("/settlements/{settlement_id}")
 def get_settlement(settlement_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    return svc.get_settlement(s, settlement_id)
+    return svc.get_settlement(s, settlement_id, a.id, a.role)
 
 
 @router.post("/settlements/{settlement_id}/approvals")
@@ -200,7 +284,23 @@ def payout_check(settlement_id: str, a = Depends(get_current_actor), s: Session 
 
 @router.get("/settlements/{settlement_id}/reconciliation")
 def reconciliation(settlement_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
+    row = svc._settlement(s, settlement_id)
+    A.require_circle_access(s, svc._circle(s, row.circle_id), a.id, a.role)
     return svc.reconciliation_report(s, settlement_id)
+
+
+@router.post("/sandbox/cycles/{cycle_id}/payments")
+def sandbox_payment(cycle_id: str, body: schemas.SandboxPaymentIn, a=Depends(get_current_actor),
+                    s: Session = Depends(get_session)):
+    """Sandbox only: simulate a provider-confirmed contribution through the real ingest pipeline."""
+    return sandbox_svc.simulate_payment(s, cycle_id, a.id, body.member_id, body.amount, body.status)
+
+
+@router.post("/sandbox/settlements/{settlement_id}/payout")
+def sandbox_payout(settlement_id: str, body: schemas.SandboxPayoutIn, a=Depends(get_current_actor),
+                   s: Session = Depends(get_session)):
+    """Sandbox only: simulate the provider's payout confirmation callback."""
+    return sandbox_svc.simulate_payout(s, settlement_id, a.id, body.status)
 
 
 @router.post("/settlements/{settlement_id}/finalize")
@@ -230,10 +330,15 @@ async def provider_webhook(request: Request, s: Session = Depends(get_session)):
     if not verifier.verify(body, headers):
         raise HTTPException(401, "invalid webhook signature")
     try:
-        import json
         payload = json.loads(body)
     except Exception as exc:
         raise HTTPException(422, f"invalid callback: {exc}")
+    if paypal_events.is_paypal_event(payload):
+        normalized = paypal_events.normalize(s, payload)
+        if normalized is None:
+            # not a payment we track; acknowledge so the provider stops retrying
+            return {"ignored": True, "event_type": payload.get("event_type")}
+        payload = normalized
     # Phase A only: persist durably, return 200. Phase B runs in the worker.
     return svc._ingest_provider_event(s, payload, body.decode("utf-8", "replace"), True)
 
@@ -246,18 +351,17 @@ def create_collection(
     s: Session = Depends(get_session),
     gw: CollectionGateway = Depends(get_collection_gateway),
 ):
-    """Create a PayPal invoice for a member's contribution obligation."""
-    from ..services.financial_service import _cycle, _circle, _require_organizer, _rules
-    from financial_engine.money import Money
+    """Create a PayPal invoice for a member's contribution obligation (organizer or the member)."""
+    from ..services.financial_service import _cycle, _circle, _rules
+    from ..errors import Forbidden
+    from ..models import Member, Obligation
 
     cycle = _cycle(s, cycle_id, lock=True)
     circle = _circle(s, cycle.circle_id)
-    _require_organizer(circle, a.id)
+    if a.id != circle.organizer_id and not A.acts_for(s.get(Member, member_id), a.id):
+        raise Forbidden("only the member or the organizer can request a payment link")
     rules = _rules(s, cycle.circle_id, cycle.ruleset_version)
 
-    # Find the obligation
-    from ..models import Obligation
-    from sqlalchemy import select
     ob = s.scalar(select(Obligation).where(Obligation.cycle_id == cycle.id, Obligation.member_id == member_id))
     if ob is None:
         raise HTTPException(404, "obligation not found")
@@ -269,24 +373,28 @@ def create_collection(
 
     amount = Money(outstanding, rules.currency)
     idempotency_key = f"collection:{cycle.id}:{member_id}"
+    back = f"{config.get_env('APP_BASE_URL', 'http://localhost:3000')}/app/circles/{cycle.circle_id}/cycles/{cycle.id}"
 
-    # Create collection request
-    result = gw.create_collection(
-        idempotency_key=idempotency_key,
-        member_id=member_id,
-        amount=amount,
-        description=f"Chit Circle contribution for cycle {cycle.number}",
-        return_url=f"{config.get_env('APP_BASE_URL', 'http://localhost:3000')}/circles/{cycle.circle_id}/payments/success",
-        cancel_url=f"{config.get_env('APP_BASE_URL', 'http://localhost:3000')}/circles/{cycle.circle_id}/payments/cancel",
-        session=s,
-    )
+    try:
+        result = gw.create_collection(
+            idempotency_key=idempotency_key,
+            member_id=member_id,
+            amount=amount,
+            description=f"ChitCircle contribution, {circle.name} round {cycle.number}",
+            return_url=f"{back}?payment=returned",
+            cancel_url=f"{back}?payment=cancelled",
+            session=s,
+        )
+    except Exception as exc:  # noqa: BLE001 - provider errors surface as a clear 502, not a 500
+        raise HTTPException(status_code=502, detail=f"payment provider error: {type(exc).__name__}")
 
     if result.status == "FAILED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=result.detail or "collection creation failed",
         )
-    return result
+    return {"status": result.status, "provider_ref": result.provider_ref, "approval_url": result.approval_url,
+            "detail": result.detail, "amount": outstanding, "currency": rules.currency}
 
 
 # ---------------------------------------------------------------- read model ETags (gap #8)
@@ -311,6 +419,7 @@ def _etag_response(data: dict, if_none_match: Optional[str] = None) -> Response:
 def circle_timeline(circle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_read_session),
                     if_none_match: Optional[str] = Header(None)):
     """Get timeline grid for Bryntum: member x cycle with cell states."""
+    A.require_circle_access(s, svc._circle(s, circle_id), a.id, a.role)
     data = get_circle_timeline(s, circle_id)
     if "error" in data:
         raise HTTPException(404, data["error"])
@@ -321,6 +430,7 @@ def circle_timeline(circle_id: str, a = Depends(get_current_actor), s: Session =
 def circle_dashboard(circle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_read_session),
                      if_none_match: Optional[str] = Header(None)):
     """Get organizer dashboard summary."""
+    A.require_circle_access(s, svc._circle(s, circle_id), a.id, a.role)
     data = get_circle_dashboard(s, circle_id)
     if "error" in data:
         raise HTTPException(404, data["error"])
@@ -331,6 +441,7 @@ def circle_dashboard(circle_id: str, a = Depends(get_current_actor), s: Session 
 def member_view(circle_id: str, member_id: str, a = Depends(get_current_actor), s: Session = Depends(get_read_session),
                 if_none_match: Optional[str] = Header(None)):
     """Get member-specific view: my payments, bids, settlements."""
+    _require_self_or_organizer(s, circle_id, member_id, a)
     data = get_member_view(s, circle_id, member_id)
     if "error" in data:
         raise HTTPException(404, data["error"])
@@ -358,11 +469,19 @@ def approve_proposal(proposal_id: str, body: schemas.ApproveProposalIn,
                                 body.step_up_evidence, body.cap_minor)
 
 
+@router.post("/proposed-actions/{proposal_id}/reject")
+def reject_proposal(proposal_id: str, body: schemas.RevokeMandateIn,
+                    a=Depends(get_current_actor), s: Session = Depends(get_session)):
+    """Dismiss a proposal; no mandate is issued."""
+    return svc.reject_proposal(s, proposal_id, a.id, body.reason)
+
+
 @router.post("/mandates/{mandate_id}/execute")
 def execute_mandate(mandate_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session),
-                    gw: PayoutGateway = Depends(get_gateway)):
+                    gw: PayoutGateway = Depends(get_gateway),
+                    cgw: CollectionGateway = Depends(get_collection_gateway)):
     """Execute an approved, mandate-locked action. Takes only the mandate id."""
-    return svc.execute_mandate(s, mandate_id, a.id, gw)
+    return svc.execute_mandate(s, mandate_id, a.id, gw, cgw)
 
 
 @router.post("/mandates/{mandate_id}/revoke")
@@ -374,13 +493,15 @@ def revoke_mandate(mandate_id: str, body: schemas.RevokeMandateIn,
 
 @router.get("/circles/{circle_id}/proposed-actions")
 def list_proposals(circle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    """List proposed actions for a circle (agent proposal queue)."""
+    """List proposed actions for a circle (agent proposal queue). Organizer only."""
+    svc._require_organizer(svc._circle(s, circle_id), a.id)
     return svc.list_proposals(s, circle_id)
 
 
 @router.get("/circles/{circle_id}/mandates")
 def list_mandates(circle_id: str, a = Depends(get_current_actor), s: Session = Depends(get_session)):
-    """List mandates for a circle (audit trail)."""
+    """List mandates for a circle (audit trail). Organizer only."""
+    svc._require_organizer(svc._circle(s, circle_id), a.id)
     return svc.list_mandates(s, circle_id)
 
 
