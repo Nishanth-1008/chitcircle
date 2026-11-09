@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { formatMinor, minorToDecimalString, MoneyFormatError, safeFormatMinor } from '@/lib/money';
+import { formatMinor, minorToDecimalString, MoneyFormatError, parseMajorToMinor, safeFormatMinor } from '@/lib/money';
+
+describe('parseMajorToMinor (typed amounts -> integer minor units, no floats)', () => {
+  it('accepts grouped and decimal input', () => {
+    expect(parseMajorToMinor('1,00,000', 'INR')).toBe(10_000_000);
+    expect(parseMajorToMinor('12000.5', 'INR')).toBe(1_200_050);
+    expect(parseMajorToMinor(' 0.07 ', 'USD')).toBe(7);
+    expect(parseMajorToMinor('500', 'JPY')).toBe(500);
+    expect(parseMajorToMinor('1.234', 'KWD')).toBe(1234);
+    expect(parseMajorToMinor('0.1', 'USD')).toBe(10);
+  });
+  it('rejects more precision than the currency has, negatives and junk', () => {
+    expect(parseMajorToMinor('1.005', 'INR')).toBeNull();
+    expect(parseMajorToMinor('5.5', 'JPY')).toBeNull();
+    expect(parseMajorToMinor('-5', 'INR')).toBeNull();
+    expect(parseMajorToMinor('abc', 'INR')).toBeNull();
+    expect(parseMajorToMinor('', 'INR')).toBeNull();
+    expect(parseMajorToMinor('5', 'XXX')).toBeNull();
+  });
+});
 
 describe('money adapter (integer minor units -> display)', () => {
   it('formats INR with Indian grouping and hides .00 on whole amounts', () => {

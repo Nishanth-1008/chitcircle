@@ -51,6 +51,30 @@ export function formatMinor(minor: number, currency: string, opts: FormatOptions
   return opts.signed && minor > 0 ? `+${absolute}` : absolute;
 }
 
+/**
+ * Parse what a person typed ("1,00,000", "12000.50") into integer minor units using string arithmetic only.
+ * Returns null for anything that is not a non-negative amount with at most the currency's decimal places.
+ */
+export function parseMajorToMinor(input: string, currency: string): number | null {
+  const exponent = CURRENCY_EXPONENTS[currency];
+  if (exponent === undefined) return null;
+  const s = input.trim().replace(/[,\s_]/g, '');
+  const m = /^(\d+)(?:\.(\d*))?$/.exec(s);
+  if (!m) return null;
+  const frac = m[2] ?? '';
+  if (frac.length > exponent) return null;
+  const digits = `${m[1]}${frac.padEnd(exponent, '0')}`.replace(/^0+(?=\d)/, '');
+  const minor = Number(digits);
+  return Number.isSafeInteger(minor) ? minor : null;
+}
+
+export const currencySymbol = (currency: string): string => {
+  try {
+    return new Intl.NumberFormat(localeFor(currency), { style: 'currency', currency, currencyDisplay: 'narrowSymbol' })
+      .formatToParts(0).find((p) => p.type === 'currency')?.value ?? currency;
+  } catch { return currency; }
+};
+
 /** Never throws: falls back to an explicit placeholder so a bad payload cannot crash a screen. */
 export function safeFormatMinor(minor: number | null | undefined, currency: string, opts?: FormatOptions): string {
   if (minor === null || minor === undefined) return '—';

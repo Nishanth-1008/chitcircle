@@ -1,58 +1,40 @@
 'use client';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Banner, Button, Wordmark } from '@/components/ui';
+import { PublicFrame } from '@/components/PublicFrame';
+import { Banner, Button, Field, Wordmark } from '@/components/ui';
+import { useAction } from '@/lib/hooks';
 import { useSession } from '@/lib/session';
 
-const ROLES = ['member', 'organizer', 'approver'] as const;
-
-/**
- * DEVELOPMENT-ONLY sign-in. The backend currently identifies callers by X-Actor-Id / X-Actor-Role headers, which any
- * client can forge. This screen exists so the app can talk to a local backend. Replace with real authentication
- * (session/JWT issued by the server) before any deployment.
- */
-export default function DevSignIn() {
+export default function SignIn() {
   const router = useRouter();
-  const { signInDev } = useSession();
-  const [actorId, setActorId] = useState('');
-  const [role, setRole] = useState<string>('member');
-  const [error, setError] = useState('');
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!actorId.trim()) { setError('Enter the actor ID your backend should treat you as.'); return; }
-    signInDev(actorId, role);
-    router.push('/app/home');
-  }
+  const { signIn } = useSession();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const submit = useAction(async () => {
+    await signIn(email, password);
+    router.replace('/app/home');
+  });
 
   return (
-    <div className="frame"><div className="app">
-      <main className="screen screen--plain" style={{ paddingTop: 48 }}>
+    <PublicFrame>
+      <form className="auth" onSubmit={(e) => { e.preventDefault(); void submit.run(); }} noValidate>
         <Wordmark large />
-        <h1>Development sign-in</h1>
-        <Banner tone="warning" icon="alert">
-          <strong>Not real authentication.</strong> The backend trusts the ID and role you type here. Never use this in production.
-        </Banner>
-        <form className="stack stack--lg" onSubmit={submit} noValidate>
-          <div className="field">
-            <label htmlFor="actor">Actor ID</label>
-            <input id="actor" value={actorId} onChange={(e) => { setActorId(e.target.value); setError(''); }}
-                   autoComplete="off" aria-invalid={!!error} aria-describedby="actor-help" />
-            <span id="actor-help" className={error ? 'field__error' : 'field__help'}>
-              {error || 'For members this is the member ID; for organizers it is the organizer ID used when creating the circle.'}
-            </span>
-          </div>
-          <div className="field">
-            <label htmlFor="role">Header role</label>
-            <select id="role" value={role} onChange={(e) => setRole(e.target.value)}>
-              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <span className="field__help">Sent as X-Actor-Role. The app never uses it to decide what you may do; the server does.</span>
-          </div>
-          <Button block type="submit">Continue</Button>
-          <Button block variant="ghost" onClick={() => router.push('/welcome')}>Back</Button>
-        </form>
-      </main>
-    </div></div>
+        <div>
+          <h1>Welcome back</h1>
+          <p className="muted">Sign in to your circles.</p>
+        </div>
+        <Field label="Email">
+          {(id) => <input id={id} type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />}
+        </Field>
+        <Field label="Password">
+          {(id) => <input id={id} type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />}
+        </Field>
+        {submit.error && <Banner tone="danger">{submit.error}</Banner>}
+        <Button block type="submit" disabled={submit.pending || !email || !password}>{submit.pending ? 'Signing in…' : 'Sign in'}</Button>
+        <p className="auth__alt">New here? <Link className="link" href="/register">Create an account</Link></p>
+      </form>
+    </PublicFrame>
   );
 }

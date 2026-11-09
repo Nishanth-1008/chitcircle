@@ -80,7 +80,22 @@ export const SECURITY_INFO: Record<string, { label: string; tone: Tone }> = {
 };
 
 export const AUCTION_REJECT_REASONS: Record<string, string> = {
-  AUCTION_CLOSED: 'The auction is not open.',
-  MEMBER_ALREADY_WON: 'This member has already received a payout.',
-  IN_ARREARS: 'Overdue contributions past the grace period.',
+  NOT_AN_AUCTION: 'This circle does not use auctions.',
+  AUCTION_NOT_OPEN: 'The auction is not open.',
+  NOT_ELIGIBLE_MEMBER: 'Not a member of this circle.',
+  ALREADY_WON: 'This member has already received a pot.',
+  ARREARS_PAST_GRACE: 'Overdue contributions past the grace period.',
+  WRONG_CURRENCY: 'Wrong currency.',
+  DISCOUNT_NOT_POSITIVE: 'The discount must be more than zero.',
+  DISCOUNT_ABOVE_CAP: 'Above the maximum discount allowed.',
+  BELOW_MINIMUM: 'Below the minimum discount.',
+  INCREMENT_VIOLATION: 'Must be a multiple of the bid step.',
+  NOT_HIGHER_THAN_CURRENT: 'Must beat the current best bid.',
+  DUPLICATE_SEALED_BID: 'You have already placed a sealed bid this round.',
 };
+
+export const reasonLabel = (code: string) => AUCTION_REJECT_REASONS[code] ?? humanize(code);
+
+export const ACTIVE_STATES = new Set(['DRAFT', 'OPEN', 'COLLECTIONS_IN_PROGRESS', 'AUCTION_OPEN', 'AUCTION_CLOSED',
+  'SETTLEMENT_CALCULATED', 'AWAITING_APPROVAL', 'APPROVED', 'PAYOUT_PENDING', 'PAYOUT_SUBMITTED', 'PAYOUT_CONFIRMED',
+  'RECONCILIATION_PENDING', 'ON_HOLD', 'FAILED', 'DISPUTED']);

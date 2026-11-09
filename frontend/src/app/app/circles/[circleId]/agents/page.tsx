@@ -1,308 +1,190 @@
 'use client';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { Icon } from '@/components/Icon';
 import { DataBoundary } from '@/components/domain';
 import { Screen } from '@/components/shell';
-import { Banner, Button, SectionHead, StatusPill } from '@/components/ui';
+import { Amount, Banner, Button, Card, EmptyState, Field, KeyValue, Modal, Pill, Skeleton, Tabs } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
-import { describeError } from '@/lib/api/errors';
-import { useApi, useSingleFlight } from '@/lib/hooks';
-import { roleIn } from '@/lib/permissions';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { useAction, useApi } from '@/lib/hooks';
 import { sessionKey, useSession } from '@/lib/session';
-import type { AgentMandateView, ProposedActionView } from '@/lib/types';
+import { humanize } from '@/lib/status';
+import { useToast } from '@/lib/toast';
+import type { CircleView, ProposedActionView } from '@/lib/types';
 
-function mandateLabel(state: string) {
-  switch (state) {
-    case 'MANDATE_ISSUED': return 'Ready to execute';
-    case 'EXECUTED': return 'Completed';
-    case 'FAILED': return 'Failed';
-    case 'EXPIRED': return 'Expired';
-    case 'REVOKED': return 'Revoked';
-    default: return state;
-  }
-}
+type TabId = 'review' | 'ready' | 'history';
 
-function mandateTone(state: string) {
-  switch (state) {
-    case 'MANDATE_ISSUED': return 'warning';
-    case 'EXECUTED': return 'success';
-    case 'FAILED': return 'danger';
-    case 'EXPIRED': return 'neutral';
-    case 'REVOKED': return 'neutral';
-    default: return 'neutral';
-  }
-}
-
-function proposalLabel(state: string) {
-  switch (state) {
-    case 'PROPOSED': return 'Awaiting your approval';
-    case 'APPROVED': return 'Approved';
-    case 'REVOKED': return 'Revoked';
-    default: return state;
-  }
-}
-
-function proposalTone(state: string) {
-  switch (state) {
-    case 'PROPOSED': return 'warning';
-    case 'APPROVED': return 'success';
-    case 'REVOKED': return 'neutral';
-    default: return 'neutral';
-  }
-}
+const KIND: Record<string, { title: string; tier: string; icon: 'send' | 'receipt' | 'arrowUp' }> = {
+  reminder: { title: 'Send a reminder', tier: 'Tier 0 · message only, no money moves', icon: 'send' },
+  invoice: { title: 'Send a catch-up invoice', tier: 'Tier 1 · requests a payment through PayPal', icon: 'receipt' },
+  payout: { title: 'Release a payout', tier: 'Tier 2 · moves money to the recipient', icon: 'arrowUp' },
+};
 
 export default function AgentsPage() {
   const { circleId } = useParams<{ circleId: string }>();
-  const ctx = useSession();
-  const k = sessionKey(ctx);
-
-  const circle = useApi(`circle:${k}:${circleId}`, (s) => api.getCircle(ctx, circleId, s));
-  const proposals = useApi<ProposedActionView[]>(`proposals:${k}:${circleId}`,
-    (s) => api.listProposals(ctx, circleId, s));
-  const mandates = useApi<AgentMandateView[]>(`mandates:${k}:${circleId}`,
-    (s) => api.listMandates(ctx, circleId, s));
-
-  const [approveMsg, setApproveMsg] = useState('');
-  const [approveProposalId, setApproveProposalId] = useState('');
-  const [stepUpMethod, setStepUpMethod] = useState('BIOMETRIC');
-  const [stepUpEvidence, setStepUpEvidence] = useState('');
-  const [capMinor, setCapMinor] = useState('');
-  const [executeMsg, setExecuteMsg] = useState('');
-  const [revokeMsg, setRevokeMsg] = useState('');
-  const [revokeReason, setRevokeReason] = useState('');
-  const [createMsg, setCreateMsg] = useState('');
-  const [newKind, setNewKind] = useState('invoice');
-  const [newAmount, setNewAmount] = useState('');
-  const [newMemberId, setNewMemberId] = useState('');
-
-  const approveAction = useSingleFlight(async (proposalId: string) => {
-    setApproveMsg('');
-    const cap = capMinor ? Number(capMinor) : undefined;
-    if (cap !== undefined && !Number.isFinite(cap)) { setApproveMsg('Cap must be a number.'); return; }
-    try {
-      await api.approveProposal(ctx, proposalId, {
-        step_up_method: stepUpMethod,
-        step_up_evidence: stepUpEvidence ? { note: stepUpEvidence } : undefined,
-        ...(cap !== undefined ? { cap_minor: cap } : {}),
-      });
-      setApproveMsg('Approved — a single-use mandate has been issued.');
-      setApproveProposalId('');
-      setStepUpMethod('BIOMETRIC');
-      setStepUpEvidence('');
-      setCapMinor('');
-    } catch (e) { setApproveMsg(describeError(e).message); }
-  });
-
-  const executeAction = useSingleFlight(async (mandateId: string) => {
-    setExecuteMsg('');
-    try {
-      const res = await api.executeMandate(ctx, mandateId);
-      setExecuteMsg(`Mandate executed: ${JSON.stringify(res.outcome)}.`);
-    } catch (e) { setExecuteMsg(describeError(e).message); }
-  });
-
-  const revokeAction = useSingleFlight(async (mandateId: string) => {
-    setRevokeMsg('');
-    try {
-      await api.revokeMandate(ctx, mandateId, { reason: revokeReason || undefined });
-      setRevokeMsg('Mandate revoked.');
-      setRevokeReason('');
-    } catch (e) { setRevokeMsg(describeError(e).message); }
-  });
-
-  const createProposalAction = useSingleFlight(async () => {
-    setCreateMsg('');
-    const amount = Number(newAmount);
-    if (!Number.isFinite(amount) || amount <= 0) { setCreateMsg('Enter a valid amount.'); return; }
-    if (!newMemberId.trim()) { setCreateMsg('Enter a member ID.'); return; }
-    try {
-      await api.createProposal(ctx, circleId, {
-        kind: newKind,
-        params: {
-          member_id: newMemberId,
-          amount_minor: Math.round(amount * 100),
-          currency: 'INR',
-          cycle_id: '',
-        },
-        rationale: 'Organizer-proposed agent action',
-      });
-      setCreateMsg('Proposal created — awaiting your approval.');
-      setNewAmount('');
-      setNewMemberId('');
-    } catch (e) { setCreateMsg(describeError(e).message); }
+  const session = useSession();
+  const toast = useToast();
+  const key = sessionKey(session);
+  const circle = useApi(`circle:${key}:${circleId}`, (s) => api.getCircle(session, circleId, s));
+  const proposals = useApi(`proposals:${key}:${circleId}`, (s) => api.listProposals(session, circleId, s));
+  const [tab, setTab] = useState<TabId>('review');
+  const run = useAction(async () => {
+    const r = await api.runCollectionsAgent(session, circleId);
+    toast(r.created.length ? `Collections agent proposed ${r.created.length} action${r.created.length === 1 ? '' : 's'}` : 'Nothing new to propose', r.created.length ? 'success' : 'info');
+    proposals.refetch();
+    return r;
   });
 
   return (
-    <Screen title="Agent approvals">
-      <DataBoundary state={circle}>
-        {(c) => {
-          const role = roleIn(c, ctx.actor);
-          const isOrganizer = role === 'organizer';
-          const pending = (proposals.data ?? []).filter((p) => p.state === 'PROPOSED');
-
-          return (
-            <>
-              {!isOrganizer && (
-                <Banner tone="neutral" icon="info">Only the circle organizer can approve, execute, or revoke mandates.</Banner>
-              )}
-
-              {circle.data && (
+    <DataBoundary state={circle} skeleton={<div className="page"><Skeleton count={3} /></div>}>
+      {(c) => (
+        <Screen title="Approvals" back={{ href: `/app/circles/${encodeURIComponent(c.id)}`, label: c.name }}
+          subtitle="Agents propose. You approve with step-up verification. Only then can the action run, exactly once."
+          actions={<Button icon="bot" disabled={run.pending} onClick={() => void run.run()}>{run.pending ? 'Scanning…' : 'Run collections agent'}</Button>}>
+          {run.error && <Banner tone="danger">{run.error}</Banner>}
+          <DataBoundary state={proposals} skeleton={<Skeleton count={2} />}>
+            {(list) => {
+              const review = list.filter((p) => p.state === 'PROPOSED');
+              const ready = list.filter((p) => p.state === 'APPROVED' && p.mandate?.state === 'MANDATE_ISSUED');
+              const history = list.filter((p) => !review.includes(p) && !ready.includes(p));
+              const shown = tab === 'review' ? review : tab === 'ready' ? ready : history;
+              return (
                 <>
-                  <section className="card stack" aria-label="Proposals awaiting approval">
-                    <SectionHead title="Proposals awaiting your approval" />
-                    <p className="muted">An agent has proposed these actions. Approving issues a single-use mandate that locks the exact amount and recipient.</p>
-                    {pending.length === 0 ? (
-                      <div className="state">
-                        <p>No proposals waiting for your decision.</p>
-                      </div>
-                    ) : (
-                      <ul>
-                        {pending.map((p) => (
-                          <li key={p.id} className="listrow">
-                            <div className="grow">
-                              <div style={{ fontWeight: 600 }}>{p.kind.charAt(0).toUpperCase() + p.kind.slice(1)}</div>
-                              <div className="muted">{p.rationale ?? 'No reason recorded'}</div>
-                              <div className="muted num" style={{ fontSize: 12 }}>
-                                Member {String(p.params.member_id)} · {Number(p.params.amount_minor)} {String(p.params.currency)}
-                              </div>
-                            </div>
-                            <StatusPill tone={proposalTone(p.state)}>{proposalLabel(p.state)}</StatusPill>
-                            {isOrganizer && approveProposalId !== p.id && (
-                              <Button variant="secondary" small onClick={() => { setApproveProposalId(p.id); }}>
-                                Approve
-                              </Button>
-                            )}
-                            {approveProposalId === p.id && (
-                              <form className="stack stack--lg" onSubmit={(e) => { e.preventDefault(); void approveAction.run(p.id); }} noValidate>
-                                <div className="field">
-                                  <label htmlFor="step-up-method">Confirm your identity</label>
-                                  <select id="step-up-method" value={stepUpMethod} onChange={(e) => setStepUpMethod(e.target.value)}>
-                                    <option value="BIOMETRIC">Biometric</option>
-                                    <option value="OTP">One-time code</option>
-                                  </select>
-                                </div>
-                                {stepUpMethod === 'OTP' && (
-                                  <div className="field">
-                                    <label htmlFor="step-up-evidence">One-time code</label>
-                                    <input id="step-up-evidence" value={stepUpEvidence} onChange={(e) => setStepUpEvidence(e.target.value)} placeholder="Enter the code sent to you" />
-                                  </div>
-                                )}
-                                <div className="field">
-                                  <label htmlFor="cap-minor">Spend cap (minor units, optional)</label>
-                                  <input id="cap-minor" type="number" value={capMinor} onChange={(e) => setCapMinor(e.target.value)} placeholder="Defaults to proposed amount" />
-                                </div>
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                  <Button type="submit" variant="primary" disabled={approveAction.pending}>
-                                    {approveAction.pending ? 'Approving…' : 'Approve'}
-                                  </Button>
-                                  <Button variant="ghost" small onClick={() => setApproveProposalId('')}>Cancel</Button>
-                                </div>
-                                {approveMsg && <Banner tone="info">{approveMsg}</Banner>}
-                              </form>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </section>
-
-                  {isOrganizer && (
-                    <section className="card stack" aria-label="Propose a new agent action">
-                      <SectionHead title="Propose a new agent action" />
-                      <p className="muted">Propose an action for an agent to carry out. It will only execute after you approve it.</p>
-                      <form className="stack stack--lg" onSubmit={(e) => { e.preventDefault(); void createProposalAction.run(); }} noValidate>
-                        <div className="field">
-                          <label htmlFor="new-kind">Action type</label>
-                          <select id="new-kind" value={newKind} onChange={(e) => setNewKind(e.target.value)}>
-                            <option value="invoice">Catch-up invoice</option>
-                            <option value="refund">Refund of overpayment</option>
-                            <option value="payout">Payout to member</option>
-                          </select>
-                        </div>
-                        <div className="field">
-                          <label htmlFor="new-member-id">Member ID</label>
-                          <input id="new-member-id" value={newMemberId} onChange={(e) => setNewMemberId(e.target.value)} />
-                        </div>
-                        <div className="field">
-                          <label htmlFor="new-amount">Amount</label>
-                          <input id="new-amount" type="number" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} placeholder="e.g. 4000 for ₹40.00" />
-                        </div>
-                        <Button block type="submit" disabled={createProposalAction.pending}>
-                          {createProposalAction.pending ? 'Creating…' : 'Propose action'}
-                        </Button>
-                        {createMsg && <Banner tone="info">{createMsg}</Banner>}
-                      </form>
-                    </section>
+                  <Tabs label="Proposal queue" value={tab} onChange={setTab} tabs={[
+                    { id: 'review', label: 'To review', count: review.length },
+                    { id: 'ready', label: 'Approved · ready', count: ready.length },
+                    { id: 'history', label: 'History' },
+                  ]} />
+                  {shown.length === 0 ? (
+                    <Card>
+                      <EmptyState icon="bot" title={tab === 'review' ? 'Nothing to review' : tab === 'ready' ? 'Nothing waiting to run' : 'No history yet'}>
+                        {tab === 'review'
+                          ? 'Run the collections agent to check who owes money. It follows a fixed schedule: a heads-up before the due date, a friendly reminder, a follow-up, then a catch-up invoice after 7 days.'
+                          : tab === 'ready' ? 'Approved actions appear here until they run or their mandate expires.' : 'Executed, rejected and expired actions are kept here as an audit trail.'}
+                      </EmptyState>
+                    </Card>
+                  ) : (
+                    <div className="grid grid--2">
+                      {shown.map((p) => <ProposalCard key={p.id} p={p} c={c} onChanged={proposals.refetch} />)}
+                    </div>
                   )}
-
-                  <section className="card stack" aria-label="Mandate history">
-                    <SectionHead title="Mandate history" />
-                    <p className="muted">Single-use mandates issued after your approval. Each mandate locks the exact amount, recipient, and circle.</p>
-                    {(mandates.data ?? []).length === 0 ? (
-                      <div className="state">
-                        <p>No mandates yet. Approve a proposal to issue one.</p>
-                      </div>
-                    ) : (
-                      <ul>
-                        {(mandates.data ?? []).map((m) => (
-                          <li key={m.id} className="listrow">
-                            <div className="grow">
-                              <div style={{ fontWeight: 600 }}>{m.kind.charAt(0).toUpperCase() + m.kind.slice(1)}</div>
-                              <div className="muted">Mandate {m.id.slice(0, 8)}… · cap {m.cap_minor} {m.currency}</div>
-                              <div className="muted num" style={{ fontSize: 12 }}>
-                                Issued {new Date(m.created_at).toLocaleDateString()} · expires {new Date(m.expires_at).toLocaleDateString()}
-                              </div>
-                            </div>
-                            <StatusPill tone={mandateTone(m.state)}>{mandateLabel(m.state)}</StatusPill>
-                            {isOrganizer && m.state === 'MANDATE_ISSUED' && (
-                              <Button variant="primary" small onClick={() => void executeAction.run(m.id)} disabled={executeAction.pending}>
-                                {executeAction.pending ? 'Executing…' : 'Execute'}
-                              </Button>
-                            )}
-                            {isOrganizer && m.state === 'MANDATE_ISSUED' && (
-                              <Button variant="ghost" small onClick={() => { setRevokeReason(''); }} title="Revoke mandate">
-                                Revoke
-                              </Button>
-                            )}
-                            {m.state === 'FAILED' && m.outcome && (
-                              <div className="muted" style={{ fontSize: 11 }}>{String(m.outcome.error ?? '')}</div>
-                            )}
-                            {m.state === 'EXECUTED' && m.outcome && (m.outcome.provider_ref as string) && (
-                              <div className="muted" style={{ fontSize: 11 }}>Provider ref: {String(m.outcome.provider_ref)}</div>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </section>
-
-                  {isOrganizer && (
-                    <section className="card stack" aria-label="Revoke a mandate">
-                      <SectionHead title="Revoke a mandate" />
-                      <p className="muted">Revoke an issued mandate before it is executed or expires.</p>
-                      <form className="stack stack--lg" onSubmit={(e) => { e.preventDefault(); void revokeAction.run(''); }} noValidate>
-                        <div className="field">
-                          <label htmlFor="revoke-reason">Reason</label>
-                          <input id="revoke-reason" value={revokeReason} onChange={(e) => setRevokeReason(e.target.value)} placeholder="Why revoke this mandate?" />
-                        </div>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <Button type="submit" variant="secondary" disabled={revokeAction.pending}>
-                            {revokeAction.pending ? 'Revoking…' : 'Revoke mandate'}
-                          </Button>
-                        </div>
-                        {revokeMsg && <Banner tone="info">{revokeMsg}</Banner>}
-                      </form>
-                    </section>
-                  )}
-
-                  {executeMsg && <Banner tone="info">{executeMsg}</Banner>}
-                  {revokeMsg && <Banner tone="info">{revokeMsg}</Banner>}
                 </>
-              )}
-            </>
-          );
-        }}
-      </DataBoundary>
-    </Screen>
+              );
+            }}
+          </DataBoundary>
+          <Banner tone="neutral" icon="shield">
+            Guardrails: amounts and recipients come only from the stored proposal; the server re-checks the member’s
+            outstanding balance at execution and refuses if anything changed. Each mandate is single-use and expires in 30 minutes.
+          </Banner>
+        </Screen>
+      )}
+    </DataBoundary>
+  );
+}
+
+function ProposalCard({ p, c, onChanged }: { p: ProposedActionView; c: CircleView; onChanged: () => void }) {
+  const session = useSession();
+  const toast = useToast();
+  const k = KIND[p.kind] ?? { title: humanize(p.kind), tier: '', icon: 'receipt' as const };
+  const name = p.params.member_name ?? c.members.find((m) => m.id === p.params.member_id)?.name ?? 'Member';
+  const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const act = useAction(async (fn: () => Promise<string>) => {
+    try { toast(await fn()); } finally { onChanged(); }      // a failed run still consumes the mandate
+  });
+  const mandate = p.mandate;
+  const outcome = mandate?.outcome as Record<string, string> | null | undefined;
+
+  return (
+    <Card className="proposal"
+      title={<span className="row"><span className="glyph glyph--brand"><Icon name={k.icon} /></span>{k.title}</span>}
+      subtitle={k.tier}
+      action={<Pill tone={p.state === 'PROPOSED' ? 'warning' : p.state === 'REJECTED' ? 'neutral' : mandate?.state === 'EXECUTED' ? 'success' : mandate?.state === 'FAILED' ? 'danger' : 'brand'}>
+        {mandate ? humanize(mandate.state) : humanize(p.state)}</Pill>}>
+      <KeyValue rows={[
+        ['Member', name],
+        ['Amount', <Amount key="a" minor={p.params.amount_minor} currency={p.params.currency} />],
+        ['Round', p.params.cycle_number ? `Round ${p.params.cycle_number}${p.params.due_date ? ` · due ${formatDate(p.params.due_date, true)}` : ''}` : '—'],
+      ]} />
+      {p.rationale && <p className="small">{p.rationale}</p>}
+      {p.params.message && <blockquote>{p.params.message}</blockquote>}
+      <p className="muted small">Proposed by {p.proposed_by.replace('agent:', '')} agent · {formatDateTime(p.created_at)}</p>
+
+      {p.state === 'PROPOSED' && (
+        <div className="row row--wrap">
+          <Button icon="shield" onClick={() => setApproving(true)}>Approve with verification</Button>
+          <Button variant="ghost" onClick={() => setRejecting(true)}>Dismiss</Button>
+        </div>
+      )}
+      {mandate?.state === 'MANDATE_ISSUED' && (
+        <div className="stack stack--sm">
+          <p className="muted small">Mandate expires {formatDateTime(mandate.expires_at)} · cap <Amount minor={mandate.cap_minor} currency={p.params.currency} /></p>
+          <div className="row row--wrap">
+            <Button icon="play" disabled={act.pending} onClick={() => void act.run(async () => {
+              await api.executeMandate(session, mandate.id);
+              return p.kind === 'invoice' ? 'Catch-up invoice created' : p.kind === 'reminder' ? 'Reminder sent' : 'Action executed';
+            })}>Run now</Button>
+            <Button variant="ghost" disabled={act.pending} onClick={() => void act.run(async () => {
+              await api.revokeMandate(session, mandate.id, 'revoked by organizer'); return 'Mandate revoked';
+            })}>Revoke</Button>
+          </div>
+        </div>
+      )}
+      {outcome && mandate?.state === 'EXECUTED' && (
+        <Banner tone="success">
+          {p.kind === 'invoice' ? <>Invoice {outcome.provider_ref} created.{' '}
+            {outcome.approval_url && <a className="link" href={outcome.approval_url} target="_blank" rel="noreferrer">Open payment link <Icon name="external" /></a>}</>
+            : p.kind === 'reminder' ? 'Reminder delivered in the app.' : `Provider status: ${outcome.status}`}
+        </Banner>
+      )}
+      {outcome && (mandate?.state === 'FAILED' || mandate?.state === 'REVOKED') && (
+        <Banner tone={mandate.state === 'FAILED' ? 'danger' : 'neutral'}>{outcome.error ? humanize(String(outcome.error)) : outcome.reason || 'Revoked'}</Banner>
+      )}
+      {act.error && <Banner tone="danger">{act.error}</Banner>}
+
+      <StepUpModal open={approving} onClose={() => setApproving(false)} p={p} name={name} onDone={onChanged} />
+      <Modal open={rejecting} title="Dismiss this proposal?" onClose={() => setRejecting(false)} footer={<>
+        <Button variant="ghost" onClick={() => setRejecting(false)}>Cancel</Button>
+        <Button variant="danger" disabled={act.pending} onClick={() => void act.run(async () => {
+          await api.rejectProposal(session, p.id, 'dismissed by organizer'); setRejecting(false); return 'Proposal dismissed';
+        })}>Dismiss</Button>
+      </>}>
+        <p>No mandate will be issued and nothing will run. The agent may propose again on a later run if the balance is still open.</p>
+      </Modal>
+    </Card>
+  );
+}
+
+/**
+ * Step-up confirmation. In this build the code is a local confirmation step (sandbox); production wires it to
+ * OTP / device biometrics. The server records the method used with the mandate.
+ */
+function StepUpModal({ open, onClose, p, name, onDone }: {
+  open: boolean; onClose: () => void; p: ProposedActionView; name: string; onDone: () => void;
+}) {
+  const session = useSession();
+  const toast = useToast();
+  const [challenge] = useState(() => String(Math.floor(100000 + Math.random() * 900000)));
+  const [code, setCode] = useState('');
+  const approve = useAction(async () => {
+    if (code !== challenge) throw new Error('That code doesn’t match. Type the 6 digits shown.');
+    const m = await api.approveProposal(session, p.id, 'OTP', { confirmed_at: new Date().toISOString(), channel: 'in_app_sandbox' });
+    toast(`Approved. Mandate valid until ${formatDateTime(m.expires_at)}`);
+    setCode(''); onClose(); onDone();
+  });
+  return (
+    <Modal open={open} title="Confirm it’s you" onClose={onClose} footer={<>
+      <Button variant="ghost" onClick={onClose}>Cancel</Button>
+      <Button icon="shield" disabled={code.length !== 6 || approve.pending} onClick={() => void approve.run()}>{approve.pending ? 'Approving…' : 'Approve'}</Button>
+    </>}>
+      <p>You are approving <b>{KIND[p.kind]?.title.toLowerCase() ?? p.kind}</b> for <b>{name}</b> of{' '}
+        <Amount minor={p.params.amount_minor} currency={p.params.currency} />. This issues a single-use mandate locked to exactly these details.</p>
+      <Banner tone="info" icon="lock">Verification code (sandbox): <b className="mono" style={{ fontSize: 15 }}>{challenge}</b></Banner>
+      <Field label="Enter the 6-digit code">
+        {(id) => <input id={id} className="otp" inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />}
+      </Field>
+      {approve.error && <Banner tone="danger">{approve.error}</Banner>}
+    </Modal>
   );
 }
