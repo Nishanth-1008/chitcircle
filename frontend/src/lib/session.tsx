@@ -34,7 +34,7 @@ export function parseStored(raw: string | null): Stored | null {
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
-  const [state, setState] = useState<Stored>({ mode: 'demo', actor: null });
+  const [state, setState] = useState<Stored>({ mode: 'live', actor: null });
 
   useEffect(() => {
     const stored = parseStored(readStorage(KEY));

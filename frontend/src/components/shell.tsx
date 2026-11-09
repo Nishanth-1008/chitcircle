@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { useSession } from '@/lib/session';
 import { Icon, type IconName } from './Icon';
-import { DemoBanner, Skeleton, Wordmark } from './ui';
+import { Skeleton, Wordmark } from './ui';
 
 const NAV: { href: string; label: string; icon: IconName; match: string[] }[] = [
   { href: '/app/home', label: 'Home', icon: 'home', match: ['/app/home'] },
@@ -42,7 +42,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="frame">
       <div className="app">
-        {mode === 'demo' && <div className="banner--sticky"><DemoBanner /></div>}
         {children}
         <BottomNav />
       </div>

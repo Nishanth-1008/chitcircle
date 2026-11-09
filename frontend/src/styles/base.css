@@ -24,8 +24,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 
 /* ---------- app frame ---------- */
 .frame { min-height: 100dvh; display: flex; justify-content: center; background: var(--surface); }
-.app { width: 100%; max-width: 480px; min-height: 100dvh; background: var(--bg); position: relative; display: flex; flex-direction: column; }
-@media (min-width: 520px) { .app { box-shadow: 0 0 0 1px var(--border); } }
+.app { width: 100%; min-height: 100dvh; background: var(--bg); position: relative; display: flex; flex-direction: column; }
+@media (min-width: 768px) { .app { max-width: 1000px; margin: 0 auto; box-shadow: 0 0 0 1px var(--border); } }
 
 .topbar {
   position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px;
@@ -40,7 +40,7 @@ ul { margin: 0; padding: 0; list-style: none; }
 .screen--plain { padding-bottom: calc(32px + var(--safe-bottom)); }
 
 .bottomnav {
-  position: fixed; bottom: 0; z-index: 30; width: 100%; max-width: 480px; display: grid; grid-template-columns: repeat(4, 1fr);
+  position: fixed; bottom: 0; z-index: 30; width: 100%; max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr);
   height: calc(var(--nav-h) + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
   background: var(--card); border-top: 1px solid var(--border); box-shadow: var(--shadow-bar);
 }
