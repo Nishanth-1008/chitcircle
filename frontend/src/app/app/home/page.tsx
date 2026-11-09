@@ -41,11 +41,11 @@ function actionItems(items: OverviewItem[], actor: ReturnType<typeof useSession>
 
 export default function HomePage() {
   const ctx = useSession();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const overview = useOverviews(ctx, saved.items);
   const [sheet, setSheet] = useState(false);
   const { open, toggle } = useExpandable();
-  const assumed = ctx.mode === 'live';
+  const assumed = true;
   const currency = resolveCurrency().code;
 
   const loaded = useMemo(() => (overview.data ?? []).filter((i) => i.circle), [overview.data]);
@@ -117,7 +117,7 @@ export default function HomePage() {
                   <SectionHead title="Recent activity" action={<Link className="link" href="/app/activity">See all</Link>} />
                   <ul className="activity">
                     {sortLedger(ledger.data).slice(0, 3).map((e) => (
-                      <ActivityRow key={e.id} event={e} memberById={memberById} demo={ctx.mode === 'demo'}
+                      <ActivityRow key={e.id} event={e} memberById={memberById} demo={false}
                                    expanded={open === e.id} onToggle={() => toggle(e.id)} />
                     ))}
                   </ul>

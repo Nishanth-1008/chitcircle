@@ -16,7 +16,7 @@ import { Banner, BottomSheet, Button } from './ui';
 export function OpenCircleSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter();
   const ctx = useSession();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const [tab, setTab] = useState<'open' | 'create'>('open');
   const [circleId, setCircleId] = useState('');
   const [error, setError] = useState('');
@@ -43,7 +43,6 @@ export function OpenCircleSheet({ open, onClose }: { open: boolean; onClose: () 
 
   const createAction = useSingleFlight(async () => {
     if (!name.trim()) { setError('Enter a circle name.'); return; }
-    if (ctx.mode !== 'live') { setError('Creating circles is only supported in Live mode.'); return; }
     setError('');
 
     const memberList = members.split(',').map((s) => s.trim()).filter(Boolean);

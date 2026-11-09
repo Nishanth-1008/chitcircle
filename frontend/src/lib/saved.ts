@@ -8,32 +8,20 @@
  * state and the UI says so.
  */
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import type { DataMode } from './api/client';
-import { DEMO_CIRCLE_IDS, DEMO_CYCLE_IDS } from './api/demo';
 import { readStorage, writeStorage } from './storage';
 
 export interface SavedCircle { id: string; savedAt: number }
 export interface SavedRound { id: string; circleId: string; savedAt: number }
 export interface SavedItems { circles: SavedCircle[]; rounds: SavedRound[] }
 
-const keyFor = (mode: DataMode) => `chitcircle.saved.v1.${mode}`;
+const keyFor = () => 'chitcircle.saved.v1';
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
-const DEMO_DEFAULT: SavedItems = {
-  circles: [
-    { id: DEMO_CIRCLE_IDS.weekend, savedAt: 2 },
-    { id: DEMO_CIRCLE_IDS.tech, savedAt: 1 },
-  ],
-  rounds: [
-    { id: DEMO_CYCLE_IDS.weekend, circleId: DEMO_CIRCLE_IDS.weekend, savedAt: 2 },
-    { id: DEMO_CYCLE_IDS.tech, circleId: DEMO_CIRCLE_IDS.tech, savedAt: 1 },
-  ],
-};
 const EMPTY: SavedItems = { circles: [], rounds: [] };
 
-export function parseSaved(raw: string | null, mode: DataMode): SavedItems {
-  if (raw === null) return mode === 'demo' ? DEMO_DEFAULT : EMPTY;
+export function parseSaved(raw: string | null): SavedItems {
+  if (raw === null) return EMPTY;
   try {
     const v = JSON.parse(raw) as Partial<SavedItems>;
     const circles = Array.isArray(v.circles) ? v.circles.filter((c) => c && typeof c.id === 'string') : [];
@@ -59,29 +47,29 @@ export function latestRoundFor(items: SavedItems, circleId: string): SavedRound 
   return items.rounds.filter((r) => r.circleId === circleId).sort((a, b) => b.savedAt - a.savedAt)[0];
 }
 
-export function useSaved(mode: DataMode) {
+export function useSaved() {
   const subscribe = useCallback((cb: () => void) => {
     listeners.add(cb);
     window.addEventListener('storage', cb);
     return () => { listeners.delete(cb); window.removeEventListener('storage', cb); };
   }, []);
-  const getSnapshot = useCallback(() => readStorage(keyFor(mode)) ?? `__unset__${mode}`, [mode]);
-  const getServerSnapshot = () => `__unset__${mode}`;
+  const getSnapshot = useCallback(() => readStorage(keyFor()) ?? `__unset__`, []);
+  const getServerSnapshot = () => `__unset__`;
   const raw = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const items = useMemo(() => parseSaved(raw.startsWith('__unset__') ? null : raw, mode), [raw, mode]);
+  const items = useMemo(() => parseSaved(raw.startsWith('__unset__') ? null : raw), [raw]);
 
   const update = useCallback((fn: (cur: SavedItems) => SavedItems) => {
-    const cur = parseSaved(readStorage(keyFor(mode)), mode);
-    writeStorage(keyFor(mode), JSON.stringify(fn(cur)));
+    const cur = parseSaved(readStorage(keyFor()));
+    writeStorage(keyFor(), JSON.stringify(fn(cur)));
     emit();
-  }, [mode]);
+  }, []);
 
   return {
     items,
     saveCircle: useCallback((id: string) => update((c) => addCircle(c, id)), [update]),
     saveRound: useCallback((id: string, circleId: string) => update((c) => addRound(c, id, circleId)), [update]),
     forgetCircle: useCallback((id: string) => update((c) => removeCircle(c, id)), [update]),
-    clear: useCallback(() => { writeStorage(keyFor(mode), JSON.stringify(EMPTY)); emit(); }, [mode]),
-    resetToDefault: useCallback(() => { writeStorage(keyFor(mode), null); emit(); }, [mode]),
+    clear: useCallback(() => { writeStorage(keyFor(), JSON.stringify(EMPTY)); emit(); }, []),
+    resetToDefault: useCallback(() => { writeStorage(keyFor(), null); emit(); }, []),
   };
 }

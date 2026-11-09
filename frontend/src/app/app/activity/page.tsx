@@ -14,7 +14,7 @@ import { sessionKey, useSession } from '@/lib/session';
 function ActivityInner() {
   const ctx = useSession();
   const params = useSearchParams();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const overview = useOverviews(ctx, saved.items);
   const [filter, setFilter] = useState<FilterId>('all');
   const [chosen, setChosen] = useState<string | null>(null);
@@ -63,7 +63,7 @@ function ActivityInner() {
                       <ul className="activity">
                         {rows.map((e) => (
                           <ActivityRow key={e.id} event={e} memberById={(id) => selected?.circle?.members.find((m) => m.id === id)}
-                                       demo={ctx.mode === 'demo'} expanded={open === e.id} onToggle={() => toggle(e.id)} />
+                                       demo={false} expanded={open === e.id} onToggle={() => toggle(e.id)} />
                         ))}
                       </ul>
                     </section>

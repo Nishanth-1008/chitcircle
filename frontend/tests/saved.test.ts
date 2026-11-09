@@ -5,13 +5,13 @@ import { resolveTheme } from '@/lib/theme';
 
 describe('saved items', () => {
   const empty = { circles: [], rounds: [] };
-  it('demo mode seeds fictional circles; live mode starts empty', () => {
-    expect(parseSaved(null, 'demo').circles.length).toBe(2);
-    expect(parseSaved(null, 'live').circles).toEqual([]);
+  it('starts empty with nothing saved', () => {
+    expect(parseSaved(null).circles.length).toBe(0);
+    expect(parseSaved(null).rounds.length).toBe(0);
   });
   it('survives corrupt storage', () => {
-    expect(parseSaved('{oops', 'live')).toEqual(empty);
-    expect(parseSaved('{"circles":[1,null,{"id":"a"}],"rounds":"x"}', 'live')).toEqual({ circles: [{ id: 'a' }], rounds: [] });
+    expect(parseSaved('{oops')).toEqual(empty);
+    expect(parseSaved('{"circles":[1,null,{"id":"a"}],"rounds":"x"}')).toEqual({ circles: [{ id: 'a' }], rounds: [] });
   });
   it('adds without duplicates and links rounds to their circle', () => {
     let s = addCircle(empty, 'c1', 1);
@@ -33,12 +33,11 @@ describe('session + theme parsing', () => {
   it('rejects malformed sessions', () => {
     expect(parseStored(null)).toBeNull();
     expect(parseStored('nope')).toBeNull();
-    expect(parseStored('{"mode":"x"}')).toBeNull();
-    expect(parseStored('{"mode":"demo","actor":{"id":1}}')).toBeNull();
+    expect(parseStored('{"actor":null}')).toEqual({ actor: null });
+    expect(parseStored('{"actor":{"id":1}}')).toBeNull();
   });
-  it('accepts a demo session; live sessions are ignored when the live API is not enabled', () => {
-    expect(parseStored('{"mode":"demo","actor":{"id":"a","role":"member"}}')?.actor?.id).toBe('a');
-    expect(parseStored('{"mode":"live","actor":{"id":"a","role":"member"}}')).toBeNull();
+  it('accepts a session with an actor', () => {
+    expect(parseStored('{"actor":{"id":"a","role":"member"}}')?.actor?.id).toBe('a');
   });
   it('resolves theme preference', () => {
     expect(resolveTheme('system', true)).toBe('dark');

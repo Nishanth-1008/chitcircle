@@ -78,12 +78,8 @@ export function FilterTabs<T extends string>({ tabs, value, onChange, label }: {
   );
 }
 
-export function Banner({ tone = 'info', icon = 'info', children }: { tone?: 'demo' | 'info' | 'warning' | 'danger' | 'neutral'; icon?: IconName; children: ReactNode }) {
+export function Banner({ tone = 'info', icon = 'info', children }: { tone?: 'info' | 'warning' | 'danger' | 'neutral'; icon?: IconName; children: ReactNode }) {
   return <div className={`banner banner--${tone}`} role={tone === 'danger' ? 'alert' : 'note'}><Icon name={icon} /><div>{children}</div></div>;
-}
-
-export function DemoBanner() {
-  return <Banner tone="demo" icon="alert">Demo mode — no real money moves. All names, amounts and IDs are fictional.</Banner>;
 }
 
 export function SectionHead({ title, action }: { title: string; action?: ReactNode }) {

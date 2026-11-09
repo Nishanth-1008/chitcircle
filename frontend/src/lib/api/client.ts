@@ -1,12 +1,8 @@
 import { API_BASE } from '../config';
 import type { Actor } from '../permissions';
-import { demoRequest } from './demo';
 import { ApiError, detailFrom, kindForStatus } from './errors';
 
-export type DataMode = 'demo' | 'live';
-
 export interface ApiContext {
-  mode: DataMode;
   actor: Actor | null;
 }
 
@@ -25,7 +21,6 @@ export interface RequestOptions {
  */
 export async function request<T>(ctx: ApiContext, path: string, opts: RequestOptions = {}): Promise<T> {
   if (opts.signal?.aborted) throw new ApiError('aborted', 0, 'Request cancelled');
-  if (ctx.mode === 'demo') return demoRequest<T>(path, opts);
   if (!ctx.actor) throw new ApiError('unauthorized', 401, 'Sign in to continue.');
 
   let res: Response;

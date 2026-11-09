@@ -45,7 +45,7 @@ export default function CircleDetailPage() {
   const { circleId } = useParams<{ circleId: string }>();
   const router = useRouter();
   const ctx = useSession();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const [tab, setTab] = useState<Tab>('overview');
   const [roundId, setRoundId] = useState('');
   const [roundError, setRoundError] = useState('');
@@ -120,7 +120,7 @@ export default function CircleDetailPage() {
                       Chit value and installment terms aren’t returned by the circle endpoint yet. They appear on a round once the server provides them.
                     </Banner>
                   </section>
-                  {role === 'organizer' && ctx.mode === 'live' && (
+                  {role === 'organizer' && (
                     <section className="card stack" aria-label="Start new round">
                       <h3>Start next round</h3>
                       <p className="muted">Create and schedule the next monthly cycle for this circle on the server.</p>

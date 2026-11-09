@@ -13,7 +13,7 @@ const ROLES = ['member', 'organizer', 'approver'] as const;
  */
 export default function DevSignIn() {
   const router = useRouter();
-  const { signInDev, liveAvailable } = useSession();
+  const { signInDev } = useSession();
   const [actorId, setActorId] = useState('');
   const [role, setRole] = useState<string>('member');
   const [error, setError] = useState('');
@@ -33,7 +33,6 @@ export default function DevSignIn() {
         <Banner tone="warning" icon="alert">
           <strong>Not real authentication.</strong> The backend trusts the ID and role you type here. Never use this in production.
         </Banner>
-        {!liveAvailable && <Banner tone="info">The live API isn’t configured. Set <code>NEXT_PUBLIC_LIVE_API_ENABLED=true</code> and <code>CHITCIRCLE_API_URL</code>.</Banner>}
         <form className="stack stack--lg" onSubmit={submit} noValidate>
           <div className="field">
             <label htmlFor="actor">Actor ID</label>
@@ -50,7 +49,7 @@ export default function DevSignIn() {
             </select>
             <span className="field__help">Sent as X-Actor-Role. The app never uses it to decide what you may do; the server does.</span>
           </div>
-          <Button block type="submit" disabled={!liveAvailable}>Continue</Button>
+          <Button block type="submit">Continue</Button>
           <Button block variant="ghost" onClick={() => router.push('/welcome')}>Back</Button>
         </form>
       </main>

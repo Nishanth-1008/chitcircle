@@ -14,11 +14,11 @@ type Tab = 'active' | 'payments' | 'completed';
 
 export default function CirclesPage() {
   const ctx = useSession();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const overview = useOverviews(ctx, saved.items);
   const [tab, setTab] = useState<Tab>('active');
   const [sheet, setSheet] = useState(false);
-  const assumed = ctx.mode === 'live';
+  const assumed = true;
 
   const groups = useMemo(() => {
     const ok = (overview.data ?? []).filter((i) => i.circle);

@@ -7,7 +7,6 @@ import { useSession } from '@/lib/session';
 
 export default function Welcome() {
   const router = useRouter();
-  const { startDemo, liveAvailable } = useSession();
   return (
     <div className="frame"><div className="app">
       <main className="welcome">
@@ -22,12 +21,9 @@ export default function Welcome() {
           <p className="lead">Manage circles, contributions, and payouts in one place.</p>
         </div>
         <div className="stack">
-          <Button block onClick={() => { startDemo(); router.push('/app/home'); }}>Explore the demo</Button>
-          {liveAvailable
-            ? <Link href="/sign-in" className="btn btn--secondary btn--block">Sign in (development)</Link>
-            : <Button block variant="secondary" disabled>Sign in isn’t available yet</Button>}
+          <Link href="/sign-in" className="btn btn--secondary btn--block">Sign in (development)</Link>
           <p className="muted" style={{ fontSize: 12 }}>
-            Account sign-up needs the authentication service, which isn’t built yet. The demo uses fictional data and no real money moves.
+            Account sign-up needs the authentication service, which isn’t built yet.
           </p>
         </div>
       </main>

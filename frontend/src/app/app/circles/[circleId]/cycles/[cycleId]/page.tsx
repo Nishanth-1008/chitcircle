@@ -22,7 +22,7 @@ import { PAYOUT_GATEWAY } from '@/lib/config';
 export default function RoundPage() {
   const { circleId, cycleId } = useParams<{ circleId: string; cycleId: string }>();
   const ctx = useSession();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const { open, toggle } = useExpandable();
   const k = sessionKey(ctx);
 
@@ -44,7 +44,6 @@ export default function RoundPage() {
   const role = roleIn(circle.data, ctx.actor);
   const member = circle.data?.members.find((m) => m.id === ctx.actor?.id);
   const hasWon = !!member?.has_won;
-  const live = ctx.mode === 'live';
 
   const [openCycleMsg, setOpenCycleMsg] = useState('');
   const [openAuctionMsg, setOpenAuctionMsg] = useState('');
@@ -148,7 +147,7 @@ export default function RoundPage() {
                   </Banner>
                 )}
                 {c.state === 'PAYOUT_PENDING' || c.state === 'PAYOUT_SUBMITTED' || c.state === 'PAYOUT_CONFIRMED' || c.state === 'RECONCILIATION_PENDING' || c.state === 'FINALIZED' ? (
-                  PAYOUT_GATEWAY === 'stub' && ctx.mode === 'live' && (
+                  PAYOUT_GATEWAY === 'stub' && (
                     <Banner tone="warning" icon="alert">The payout gateway is a stub in this backend build. A payout status here does not mean real funds moved.</Banner>
                   )
                 ) : null}
@@ -160,7 +159,7 @@ export default function RoundPage() {
                         {mine.outstanding === 0 ? 'Settled' : 'Outstanding'}
                       </StatusPill>} />
                     <div className="stats">
-                      <div><div className="stat__label">Net due</div><div className="stat__value"><Amount minor={mine.net_payable} currency={currency.code} assumed={currency.assumed && ctx.mode === 'live'} /></div></div>
+                      <div><div className="stat__label">Net due</div><div className="stat__value"><Amount minor={mine.net_payable} currency={currency.code} assumed={currency.assumed} /></div></div>
                       <div><div className="stat__label">Confirmed paid</div><div className="stat__value"><Amount minor={mine.confirmed_paid} currency={currency.code} assumed={false} tone={mine.confirmed_paid > 0 ? 'income' : 'default'} /></div></div>
                       <div><div className="stat__label">Outstanding</div><div className="stat__value"><Amount minor={mine.outstanding} currency={currency.code} tone={mine.outstanding > 0 ? 'warning' : 'income'} /></div></div>
                     </div>
@@ -168,7 +167,7 @@ export default function RoundPage() {
                   </section>
                 )}
 
-                {live && mine && role === 'member' && mine.outstanding > 0 && !hasWon && (
+                {mine && role === 'member' && mine.outstanding > 0 && !hasWon && (
                   <section className="card stack" aria-label="Pay your contribution">
                     <SectionHead title="Pay your contribution" />
                     <p className="muted">Create a PayPal payment request for your outstanding contribution. You’ll complete the payment on PayPal’s site.</p>
@@ -249,7 +248,7 @@ export default function RoundPage() {
                   <ul className="activity">
                     {events.slice(0, 4).map((e) => (
                       <ActivityRow key={e.id} event={e} memberById={(id) => circle.data?.members.find((m) => m.id === id)}
-                                   demo={ctx.mode === 'demo'} expanded={open === e.id} onToggle={() => toggle(e.id)} />
+                                   demo={false} expanded={open === e.id} onToggle={() => toggle(e.id)} />
                     ))}
                   </ul>
                 </section>
@@ -268,7 +267,7 @@ export default function RoundPage() {
                   </details>
                 )}
 
-                {live && c.state === 'DRAFT' && role === 'organizer' && (
+                {c.state === 'DRAFT' && role === 'organizer' && (
                   <section className="card stack" aria-label="Start collections">
                     <SectionHead title="Start collections" />
                     <p className="muted">Open this round so members can begin contributing.</p>
@@ -279,7 +278,7 @@ export default function RoundPage() {
                   </section>
                 )}
 
-                {live && c.state === 'COLLECTIONS_IN_PROGRESS' && role === 'organizer' && (
+                {c.state === 'COLLECTIONS_IN_PROGRESS' && role === 'organizer' && (
                   <section className="card stack" aria-label="Open auction">
                     <SectionHead title="Open auction" />
                     <p className="muted">Move this round to auction so members can place bids.</p>
@@ -290,7 +289,7 @@ export default function RoundPage() {
                   </section>
                 )}
 
-                {live && c.state === 'AUCTION_OPEN' && role === 'organizer' && (
+                {c.state === 'AUCTION_OPEN' && role === 'organizer' && (
                   <section className="card stack" aria-label="Close auction">
                     <SectionHead title="Close auction" />
                     <p className="muted">Close bidding and let the server determine the winner.</p>
@@ -301,7 +300,7 @@ export default function RoundPage() {
                   </section>
                 )}
 
-                {live && c.state === 'AUCTION_OPEN' && role === 'member' && !hasWon && (
+                {c.state === 'AUCTION_OPEN' && role === 'member' && !hasWon && (
                   <section className="card stack" aria-label="Place your bid">
                     <SectionHead title="Place your bid" />
                     <p className="muted">Enter the discount you want to bid. The server validates bids and decides the winner.</p>
@@ -317,7 +316,7 @@ export default function RoundPage() {
                   </section>
                 )}
 
-                {live && c.state === 'AUCTION_CLOSED' && role === 'organizer' && (
+                {c.state === 'AUCTION_CLOSED' && role === 'organizer' && (
                   <section className="card stack" aria-label="Select recipient">
                     <SectionHead title="Select recipient" />
                     <p className="muted">Choose the auction winner who receives the payout this round.</p>
@@ -328,7 +327,7 @@ export default function RoundPage() {
                   </section>
                 )}
 
-                {live && c.state === 'SETTLEMENT_CALCULATED' && role === 'organizer' && (
+                {c.state === 'SETTLEMENT_CALCULATED' && role === 'organizer' && (
                   <section className="card stack" aria-label="Calculate settlement">
                     <SectionHead title="Calculate settlement" />
                     <p className="muted">Confirm the settlement figures before they go to approval.</p>

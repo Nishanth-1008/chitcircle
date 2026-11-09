@@ -20,7 +20,7 @@ export default function ProfilePage() {
   const router = useRouter();
   const ctx = useSession();
   const { pref, setPref } = useTheme();
-  const saved = useSaved(ctx.mode);
+  const saved = useSaved();
   const [health, setHealth] = useState<{ ok: boolean; text: string } | null>(null);
 
   const check = useSingleFlight(async () => {
@@ -38,12 +38,10 @@ export default function ProfilePage() {
           <p style={{ fontWeight: 700 }}>{ctx.actor?.displayName ?? 'Signed in'}</p>
           <p className="muted num" style={{ overflowWrap: 'anywhere' }}>ID {ctx.actor?.id}</p>
         </div>
-        <StatusPill tone={ctx.mode === 'demo' ? 'warning' : 'info'}>{ctx.mode === 'demo' ? 'Demo data' : 'Live API'}</StatusPill>
+        <StatusPill tone="info">Live API</StatusPill>
       </section>
 
-      {ctx.mode === 'live' && (
-        <Banner tone="warning" icon="alert"><strong>Development identity.</strong> The backend trusts the ID and role sent by this browser. Replace with real authentication before deployment.</Banner>
-      )}
+      <Banner tone="warning" icon="alert"><strong>Development identity.</strong> The backend trusts the ID and role sent by this browser. Replace with real authentication before deployment.</Banner>
 
       <section className="card stack" aria-label="Appearance">
         <h3>Theme</h3>
@@ -57,18 +55,15 @@ export default function ProfilePage() {
         <h3>Saved on this device</h3>
         <p className="muted">{saved.items.circles.length} circle{saved.items.circles.length === 1 ? '' : 's'}, {saved.items.rounds.length} round{saved.items.rounds.length === 1 ? '' : 's'}. These shortcuts live in this browser only; they are not account settings.</p>
         <div className="row">
-          {ctx.mode === 'demo' && <Button variant="secondary" small onClick={saved.resetToDefault}>Reset demo data</Button>}
           <Button variant="secondary" small onClick={saved.clear}>Clear saved</Button>
         </div>
       </section>
 
-      {ctx.mode === 'live' && (
-        <section className="card stack" aria-label="Connection">
-          <h3>Connection</h3>
-          <Button variant="secondary" small onClick={() => void check.run()} disabled={check.pending}>{check.pending ? 'Checking…' : 'Check API'}</Button>
-          {health && <p className={health.ok ? 'amount--income' : 'field__error'} role="status">{health.text}</p>}
-        </section>
-      )}
+      <section className="card stack" aria-label="Connection">
+        <h3>Connection</h3>
+        <Button variant="secondary" small onClick={() => void check.run()} disabled={check.pending}>{check.pending ? 'Checking…' : 'Check API'}</Button>
+        {health && <p className={health.ok ? 'amount--income' : 'field__error'} role="status">{health.text}</p>}
+      </section>
 
       <section className="card" aria-label="More">
         <div className="link-list">

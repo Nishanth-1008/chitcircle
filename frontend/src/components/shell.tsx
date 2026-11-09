@@ -32,7 +32,7 @@ export function BottomNav() {
 
 /** Gate + frame for everything under /app. Identity comes from the session; role-specific UI is derived from server data. */
 export function AppShell({ children }: { children: ReactNode }) {
-  const { ready, actor, mode } = useSession();
+  const { ready, actor } = useSession();
   const router = useRouter();
   useEffect(() => { if (ready && !actor) router.replace('/welcome'); }, [ready, actor, router]);
 

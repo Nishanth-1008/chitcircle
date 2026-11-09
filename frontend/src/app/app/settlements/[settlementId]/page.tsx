@@ -30,8 +30,6 @@ export default function SettlementPage() {
   const back = circleId && cycleId ? `/app/circles/${encodeURIComponent(circleId)}/cycles/${encodeURIComponent(cycleId)}` : '/app/circles';
   const info = cycle.data ? stateInfo(cycle.data.state) : undefined;
   const role = roleIn(circle.data, ctx.actor);
-  const live = ctx.mode === 'live';
-
   const [approveMsg, setApproveMsg] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [executePayoutMsg, setExecutePayoutMsg] = useState('');
@@ -71,10 +69,10 @@ export default function SettlementPage() {
     } catch (e) { setFinalizeMsg(describeError(e).message); }
   });
 
-  const canApprove = live && role === 'organizer' && cycle.data?.state === 'AWAITING_APPROVAL';
-  const canPayout = live && role === 'organizer' && cycle.data?.state === 'APPROVED';
-  const canCheckPayout = live && role === 'organizer' && cycle.data?.state === 'PAYOUT_SUBMITTED';
-  const canFinalize = live && role === 'organizer' && cycle.data?.state === 'RECONCILIATION_PENDING';
+  const canApprove = role === 'organizer' && cycle.data?.state === 'AWAITING_APPROVAL';
+  const canPayout = role === 'organizer' && cycle.data?.state === 'APPROVED';
+  const canCheckPayout = role === 'organizer' && cycle.data?.state === 'PAYOUT_SUBMITTED';
+  const canFinalize = role === 'organizer' && cycle.data?.state === 'RECONCILIATION_PENDING';
 
   return (
     <Screen title="Settlement" back={back}>
@@ -92,10 +90,9 @@ export default function SettlementPage() {
               {info && <p className="muted">{info.hint}</p>}
             </section>
 
-            {PAYOUT_GATEWAY === 'stub' && ctx.mode === 'live' && (
+            {PAYOUT_GATEWAY === 'stub' && (
               <Banner tone="warning" icon="alert">The payout gateway is a stub in this backend build. A payout status here does not mean real funds moved.</Banner>
             )}
-            {ctx.mode === 'demo' && <Banner tone="info" icon="info">These figures are fictional fixtures that follow the backend’s settlement model.</Banner>}
 
             <FinancialBreakdown data={st.settlement} actorId={ctx.actor?.id} nameOf={(id) => memberName(circle.data, id)} />
 

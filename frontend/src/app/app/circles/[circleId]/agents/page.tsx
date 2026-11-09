@@ -142,10 +142,6 @@ export default function AgentsPage() {
 
           return (
             <>
-              {ctx.mode !== 'live' && (
-                <Banner tone="demo" icon="alert">Demo mode — no real money moves. All names, amounts and IDs are fictional.</Banner>
-              )}
-
               {!isOrganizer && (
                 <Banner tone="neutral" icon="info">Only the circle organizer can approve, execute, or revoke mandates.</Banner>
               )}
