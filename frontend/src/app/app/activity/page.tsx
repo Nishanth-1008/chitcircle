@@ -5,6 +5,7 @@ import { ActivityList, DataBoundary } from '@/components/domain';
 import { Screen } from '@/components/shell';
 import { Banner, Button, Card, EmptyState, LinkButton, Skeleton, Tabs } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
+import { activityHref } from '@/lib/routes';
 import { errorMessage } from '@/lib/api/errors';
 import { useApi } from '@/lib/hooks';
 import { FILTERS, matchesFilter, type FilterId } from '@/lib/ledger';
@@ -57,7 +58,7 @@ function Activity() {
             <div className="row row--wrap">
               <label className="sr-only" htmlFor="circle-pick">Circle</label>
               <select id="circle-pick" style={{ maxWidth: 360 }} value={selected ?? ''}
-                      onChange={(e) => router.replace(`/app/activity?circle=${encodeURIComponent(e.target.value)}`)}>
+                      onChange={(e) => router.replace(activityHref(e.target.value))}>
                 {list.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>

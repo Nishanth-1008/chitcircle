@@ -10,6 +10,7 @@ import {
 } from '@/components/ui';
 import { useAppConfig } from '@/lib/appConfig';
 import { api } from '@/lib/api/endpoints';
+import { circleCycleHref, settlementHref } from '@/lib/routes';
 import { formatDate, formatDateTime } from '@/lib/format';
 import { useAction, useApi, type ApiState } from '@/lib/hooks';
 import { isAuction } from '@/lib/ruleset';
@@ -50,7 +51,7 @@ function Round() {
               <Screen
                 wide
                 title={`Round ${cy.number}`}
-                back={{ href: `/app/circles/${encodeURIComponent(c.id)}`, label: c.name }}
+                back={{ href: circleHref(c.id), label: c.name }}
                 subtitle={<><StateBadge state={cy.state} /><DueLine iso={cy.due_date} />
                   {poll && <span className="muted small"><Icon name="refresh" width={12} height={12} /> Live</span>}</>}
               >
@@ -81,7 +82,7 @@ function Round() {
                         ['Payout method', humanize(cy.payout_method ?? cy.payout_mode)],
                         ['Recipient', cy.winner_member_id ? nameOf(cy.winner_member_id) : 'Not selected'],
                         ...(cy.discount !== null ? [['Winning discount', <Amount key="d" minor={cy.discount} currency={cy.currency} />] as [string, ReactNode]] : []),
-                        ...(cy.settlement_id ? [['Settlement', <Link key="s" className="link" href={`/app/settlements/${encodeURIComponent(cy.settlement_id)}`}>Open <Icon name="chevronRight" /></Link>] as [string, ReactNode]] : []),
+                        ...(cy.settlement_id ? [['Settlement', <Link key="s" className="link" href={settlementHref(cy.settlement_id)}>Open <Icon name="chevronRight" /></Link>] as [string, ReactNode]] : []),
                       ]} />
                     </Card>
                     <History cy={cy} />
@@ -105,7 +106,7 @@ function NextStep({ c, cy, bids, nameOf, onChanged }: {
   const toast = useToast();
   const org = c.my_role === 'organizer';
   const auction = isAuction(cy.payout_mode);
-  const settlementHref = cy.settlement_id ? `/app/settlements/${encodeURIComponent(cy.settlement_id)}` : null;
+  const settlementHrefLocal = cy.settlement_id ? settlementHref(cy.settlement_id) : null;
   const act = useAction(async (fn: () => Promise<unknown>, done: string) => {
     try { await fn(); toast(done); } finally { onChanged(); }
   });
@@ -161,12 +162,12 @@ function NextStep({ c, cy, bids, nameOf, onChanged }: {
     case 'PAYOUT_CONFIRMED':
     case 'RECONCILIATION_PENDING':
       body = <>{info.hint}{cy.obligations.some((o) => o.outstanding > 0) && ' Contributions still outstanding are listed below.'}</>;
-      if (settlementHref) actions = <LinkButton href={settlementHref} icon="scale">{org ? 'Review settlement' : 'View settlement'}</LinkButton>;
+      if (settlementHrefLocal) actions = <LinkButton href={settlementHrefLocal} icon="scale">{org ? 'Review settlement' : 'View settlement'}</LinkButton>;
       break;
     case 'FINALIZED':
       title = 'Round complete';
       body = `${nameOf(cy.winner_member_id)} received the pot and every check passed. This round is closed.`;
-      if (settlementHref) actions = <LinkButton href={settlementHref} variant="secondary" icon="receipt">View settlement</LinkButton>;
+      if (settlementHrefLocal) actions = <LinkButton href={settlementHrefLocal} variant="secondary" icon="receipt">View settlement</LinkButton>;
       break;
     case 'ON_HOLD':
     case 'FAILED':

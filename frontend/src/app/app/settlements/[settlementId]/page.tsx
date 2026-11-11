@@ -8,6 +8,7 @@ import { Screen } from '@/components/shell';
 import { Amount, Banner, Button, Card, Field, KeyValue, Modal, Pill, Skeleton } from '@/components/ui';
 import { useAppConfig } from '@/lib/appConfig';
 import { api } from '@/lib/api/endpoints';
+import { circleCycleHref, settlementHref, settlementReconciliationHref } from '@/lib/routes';
 import { formatDateTime } from '@/lib/format';
 import { useAction, useApi } from '@/lib/hooks';
 import { sessionKey, useSession } from '@/lib/session';
@@ -39,7 +40,7 @@ export default function SettlementPage() {
 
 function SettlementBody({ s, c, onChanged }: { s: SettlementView; c: CircleView; onChanged: () => void }) {
   const nameOf = (id: string) => c.members.find((m) => m.id === id)?.name ?? 'Member';
-  const roundHref = `/app/circles/${encodeURIComponent(c.id)}/cycles/${encodeURIComponent(s.cycle_id)}`;
+  const roundHref = circleCycleHref(c.id, s.cycle_id);
   return (
     <Screen
       wide
@@ -75,7 +76,7 @@ function SettlementBody({ s, c, onChanged }: { s: SettlementView; c: CircleView;
             ['Idempotency key', <span key="k" className="mono">{s.payout_reference}</span>],
             ['Finalized', s.finalized_at ? formatDateTime(s.finalized_at) : 'Not yet'],
           ]} />
-          <Link className="link" href={`/app/settlements/${encodeURIComponent(s.id)}/reconciliation`}>Reconciliation report <Icon name="chevronRight" /></Link>
+          <Link className="link" href={settlementReconciliationHref(s.id)}>Reconciliation report <Icon name="chevronRight" /></Link>
         </Card>
       </div>
       <p className="muted small">Every amount above comes from the stored settlement (rules fingerprint <span className="mono">{s.settlement.ruleset_fingerprint.slice(0, 16)}…</span>). The app never recalculates money.</p>
@@ -173,7 +174,7 @@ function Actions({ s, c, nameOf, onChanged }: { s: SettlementView; c: CircleView
           <Button icon="checkCircle" disabled={act.pending} onClick={() => void act.run(async () => {
             await api.finalize(session, s.id); return 'Round finalized';
           })}>Finalize round</Button>
-          <Link className="btn btn--secondary" href={`/app/settlements/${encodeURIComponent(s.id)}/reconciliation`}>View reconciliation</Link>
+          <Link className="btn btn--secondary" href={settlementReconciliationHref(s.id)}>View reconciliation</Link>
         </div>
       </>
     ) : <p>{info.hint}</p>;
@@ -185,7 +186,7 @@ function Actions({ s, c, nameOf, onChanged }: { s: SettlementView; c: CircleView
         <p>{info.hint}</p>
         {s.state_reason && <Banner tone={state === 'DISPUTED' ? 'warning' : 'danger'} title="Recorded reason">{s.state_reason}</Banner>}
         {org && <div className="next-step__actions">
-          <Link className="btn btn--primary" href={`/app/circles/${encodeURIComponent(c.id)}/cycles/${encodeURIComponent(s.cycle_id)}`}>
+          <Link className="btn btn--primary" href={circleCycleHref(c.id, s.cycle_id)}>
             {state === 'DISPUTED' ? 'Resolve on the round page' : 'Review and resume the round'}</Link>
         </div>}
       </>
@@ -201,7 +202,7 @@ function Actions({ s, c, nameOf, onChanged }: { s: SettlementView; c: CircleView
       {blocked && (
         <Banner tone="danger" title="That didn’t go through">
           {blocked}{' '}
-          {state === 'RECONCILIATION_PENDING' && <Link className="link" href={`/app/settlements/${encodeURIComponent(s.id)}/reconciliation`}>See what doesn’t match</Link>}
+          {state === ‘RECONCILIATION_PENDING’ && <Link className="link" href={settlementReconciliationHref(s.id)}>See what doesn’t match</Link>}
         </Banner>
       )}
       <Modal open={!!decision} title={decision === 'APPROVE' ? 'Approve settlement' : 'Reject settlement'} onClose={() => setDecision(null)}

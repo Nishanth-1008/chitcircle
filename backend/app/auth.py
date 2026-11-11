@@ -137,8 +137,11 @@ async def get_current_actor(
         # AuthZ is resolved from the database, not trusted from the token.
         # SET app.current_user_id is PostgreSQL-specific (RLS session variable);
         # on SQLite (tests, local bootstrap) it is a no-op since RLS isn't enabled there.
+        # NOTE: SET does not accept parameterized values in PostgreSQL, so we interpolate
+        # the UUID directly. user.id is a database-generated UUID (hex + hyphens only),
+        # so this is safe from injection.
         if session.bind.dialect.name == "postgresql":
-            session.execute(text("SET app.current_user_id = :id"), {"id": user.id})
+            session.execute(text(f"SET app.current_user_id = '{user.id}'"))
         return Actor(id=user.id, role=user.role, method="jwt")
 
     if x_actor_id:
@@ -147,7 +150,7 @@ async def get_current_actor(
                                 detail="Actor headers are disabled; send a Bearer token",
                                 headers={"WWW-Authenticate": "Bearer"})
         if session.bind.dialect.name == "postgresql":
-            session.execute(text("SET app.current_user_id = :id"), {"id": x_actor_id})
+            session.execute(text(f"SET app.current_user_id = '{x_actor_id}'"))
         return Actor(id=x_actor_id, role=x_actor_role or "member", method="header")
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated",

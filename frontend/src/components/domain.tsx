@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { dueLabel, formatDate, formatDateTime } from '@/lib/format';
 import type { ApiState } from '@/lib/hooks';
+import { circleHref, settlementHref } from '@/lib/routes';
 import { describeLedgerEvent } from '@/lib/ledger';
 import { currencySymbol, parseMajorToMinor } from '@/lib/money';
 import { payoutModeTitle } from '@/lib/ruleset';
@@ -56,7 +57,7 @@ export function RoundStepper({ state, priorState }: { state: string; priorState:
 
 export function CircleCard({ c }: { c: MyCircle }) {
   const cy = c.current_cycle;
-  const href = `/app/circles/${encodeURIComponent(c.id)}`;
+  const href = circleHref(c.id);
   const owes = cy && cy.my_outstanding !== null && cy.my_outstanding > 0 && paymentOpen(c.payout_mode, cy);
   return (
     <Link href={href} className="card card--link circle-card" aria-label={`Open ${c.name}`}>
@@ -124,7 +125,7 @@ export function ActivityRow({ event, nameOf, expanded, onToggle, showRound }: {
             <div><dt>Rule version</dt><dd>v{event.ruleset_version}</dd></div>
             {event.provider_ref && <div><dt>Provider ref</dt><dd className="mono">{event.provider_ref}</dd></div>}
             {event.settlement_id && <div><dt>Settlement</dt>
-              <dd><Link className="link" href={`/app/settlements/${encodeURIComponent(event.settlement_id)}`}>Open settlement</Link></dd></div>}
+              <dd><Link className="link" href={settlementHref(event.settlement_id)}>Open settlement</Link></dd></div>}
             {event.reason && <div><dt>Reason</dt><dd>{event.reason}</dd></div>}
             {event.reverses && <div><dt>Reverses</dt><dd className="mono">{event.reverses}</dd></div>}
           </dl>

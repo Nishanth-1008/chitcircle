@@ -6,6 +6,7 @@ import { MoneyInput } from '@/components/domain';
 import { Screen } from '@/components/shell';
 import { Banner, Button, Card, Field } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
+import { circleHref } from '@/lib/routes';
 import { useAction } from '@/lib/hooks';
 import { CURRENCY_EXPONENTS, parseMajorToMinor } from '@/lib/money';
 import { PAYOUT_MODES, buildRuleset, describeRules, isAuction, percentToRate, type RulesForm } from '@/lib/ruleset';
@@ -80,7 +81,7 @@ export default function NewCirclePage() {
     const members = includeMe ? (mySeat === 'first' ? [meSeat, ...others] : [...others, meSeat]) : others;
     const res = await api.createCircle(session, { name: name.trim(), ruleset: buildRuleset(form), members });
     toast(`“${name.trim()}” created`);
-    router.push(`/app/circles/${encodeURIComponent(res.id)}`);
+    router.push(circleHref(res.id));
   });
 
   const setSeat = (i: number, patch: Partial<Seat>) => setSeats((s) => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
