@@ -43,6 +43,9 @@
 
   --font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --nav-h: 60px;
+  --sidebar-w: 248px;
+  --page-max: 1080px;
+  --hero: linear-gradient(135deg, #4169e1 0%, #5b5bd6 55%, #7b61d9 100%);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   color-scheme: light;

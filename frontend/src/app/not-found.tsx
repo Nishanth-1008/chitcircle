@@ -2,12 +2,13 @@ import Link from 'next/link';
 
 export default function NotFound() {
   return (
-    <div className="frame"><div className="app"><main className="screen screen--plain">
+    <main className="public__panel" style={{ minHeight: '100dvh' }}>
       <div className="state">
-        <h1>Page not found</h1>
-        <p>That page doesn’t exist. Head back to your circles.</p>
+        <div className="state__icon" aria-hidden="true">?</div>
+        <h3>Page not found</h3>
+        <p>That page doesn’t exist, or the link is out of date.</p>
         <Link className="btn btn--primary" href="/app/home">Go to Home</Link>
       </div>
-    </main></div></div>
+    </main>
   );
 }

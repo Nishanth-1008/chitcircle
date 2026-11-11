@@ -1,16 +1,20 @@
 /** @type {import('next').NextConfig} */
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// The FastAPI backend has no CORS middleware and uses a header-based auth stub, so the browser talks to
-// same-origin /api/backend/* and Next proxies a fixed allow-list of paths to the backend.
-// `/webhooks/*` is deliberately NOT proxied: provider callbacks are server-to-server only.
+// The FastAPI backend has no CORS middleware, so the browser talks to same-origin /api/backend/* and Next
+// proxies a fixed allow-list of paths to the backend. `/webhooks/*` is deliberately NOT proxied: provider
+// callbacks are server-to-server only.
 const backend = (process.env.CHITCIRCLE_API_URL || '').replace(/\/$/, '');
 
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  outputFileTracingRoot: path.dirname(fileURLToPath(import.meta.url)),
   async rewrites() {
     if (!backend) return [];
-    return ['health', 'circles', 'cycles', 'settlements', 'ledger'].flatMap((p) => [
+    return ['health', 'config', 'auth', 'circles', 'cycles', 'settlements', 'ledger', 'collections', 'sandbox',
+      'proposed-actions', 'mandates'].flatMap((p) => [
       { source: `/api/backend/${p}`, destination: `${backend}/${p}` },
       { source: `/api/backend/${p}/:path*`, destination: `${backend}/${p}/:path*` },
     ]);

@@ -47,7 +47,8 @@ def _init_tracing() -> None:
     if not _OTEL_AVAILABLE:
         return
     provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+    if config.get_env("OTEL_CONSOLE_EXPORT") in ("1", "true", "yes"):
+        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     trace.set_tracer_provider(provider)
     _otel_tracer = trace.get_tracer("chitcircle.api")
 
@@ -227,6 +228,8 @@ def create_app() -> FastAPI:
     # Same key + different hash → 422. No key on a state-changing method → proceed (the key is
     # enforced by the service layer where it matters most).
     _IDEMPOTENT_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+    # Provider callbacks dedupe on the provider event id; auth responses carry tokens and must not be stored.
+    _IDEMPOTENCY_EXEMPT_PREFIXES = ("/webhooks/", "/auth/")
 
     def _resolve_actor(request: Request) -> Optional[str]:
         auth = request.headers.get("Authorization", "")
@@ -240,7 +243,7 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def idempotency_middleware(request: Request, call_next):
-        if request.method not in _IDEMPOTENT_METHODS:
+        if request.method not in _IDEMPOTENT_METHODS or request.url.path.startswith(_IDEMPOTENCY_EXEMPT_PREFIXES):
             return await call_next(request)
 
         idem_key = request.headers.get("Idempotency-Key")
@@ -321,7 +324,7 @@ def create_app() -> FastAPI:
             media_type=response.media_type,
         )
 
-    app.include_router(router, prefix="/v1")
+    app.include_router(router)
     return app
 
 

@@ -91,7 +91,33 @@ def init_db(url=None, create=None):
         if engine.dialect.name == "postgresql":
             with engine.begin() as c:
                 c.execute(text(_GUARD_SQL))
+        if engine.dialect.name == "sqlite":
+            _sqlite_add_missing_columns(engine)
     return engine
+
+
+def _sqlite_add_missing_columns(eng) -> None:
+    """Bring a pre-existing local SQLite file up to the current models.
+
+    `create_all` only creates missing tables. Local dev databases have no Alembic history, so
+    nullable columns added since the file was created are appended here. Postgres never takes
+    this path: its schema is owned by Alembic.
+    """
+    from sqlalchemy import inspect
+    insp = inspect(eng)
+    with eng.begin() as c:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            existing = {col["name"] for col in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing or not col.nullable:
+                    continue
+                ddl = col.type.compile(dialect=eng.dialect)
+                c.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}'))
+                if col.index:
+                    c.execute(text(f'CREATE INDEX IF NOT EXISTS "ix_{table.name}_{col.name}" '
+                                   f'ON "{table.name}" ("{col.name}")'))
 
 
 def migrations_pending() -> bool:

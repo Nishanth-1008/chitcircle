@@ -1,137 +1,102 @@
 'use client';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
-import { Icon, type IconName } from '@/components/Icon';
-import { ActivityRow, CircleCard, DataBoundary, DueCard, useExpandable } from '@/components/domain';
-import { OpenCircleSheet } from '@/components/OpenCircleSheet';
+import { useMemo } from 'react';
+import { Icon } from '@/components/Icon';
+import { CircleCard, DataBoundary } from '@/components/domain';
 import { Screen } from '@/components/shell';
-import { Avatar, Banner, Button, EmptyState, SectionHead, Skeleton } from '@/components/ui';
+import { Amount, EmptyState, LinkButton, SectionHead, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
-import { resolveCurrency } from '@/lib/api/currency';
-import { myObligation } from '@/lib/derive';
-import { sortLedger } from '@/lib/ledger';
 import { useApi } from '@/lib/hooks';
-import { useOverviews, type OverviewItem } from '@/lib/overview';
-import { roleIn } from '@/lib/permissions';
-import { useSaved } from '@/lib/saved';
 import { sessionKey, useSession } from '@/lib/session';
-import { stateInfo } from '@/lib/status';
+import type { MyCircle } from '@/lib/types';
+import { circleAttention, paymentOpen } from '@/lib/workflow';
 
 function greeting(now = new Date()) {
   const h = now.getHours();
   return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 }
 
-interface ActionItem { id: string; icon: IconName; title: string; body: string; href: string }
-
-function actionItems(items: OverviewItem[], actor: ReturnType<typeof useSession>['actor']): ActionItem[] {
-  const out: ActionItem[] = [];
-  for (const it of items) {
-    if (!it.circle || !it.round) continue;
-    const href = `/app/circles/${encodeURIComponent(it.circle.id)}/cycles/${encodeURIComponent(it.round.id)}`;
-    const role = roleIn(it.circle, actor);
-    const s = it.round.state;
-    const body = `${it.circle.name} · Round ${it.round.number}`;
-    if (s === 'AUCTION_OPEN') out.push({ id: `${it.round.id}-auc`, icon: 'gavel', title: 'Auction is open', body, href });
-    else if (s === 'AWAITING_APPROVAL' && role === 'organizer') out.push({ id: `${it.round.id}-app`, icon: 'scale', title: 'Settlement awaiting approval', body, href });
-    else if (s === 'ON_HOLD' || s === 'FAILED' || s === 'DISPUTED') out.push({ id: `${it.round.id}-att`, icon: 'alert', title: `Round ${stateInfo(s).label.toLowerCase()}`, body: `${it.circle.name} needs attention`, href });
+/** Outstanding per currency, as reported by the server (summed only within one currency). */
+function duesByCurrency(circles: MyCircle[]) {
+  const out = new Map<string, number>();
+  for (const c of circles) {
+    const cy = c.current_cycle;
+    if (cy && cy.my_outstanding && paymentOpen(c.payout_mode, cy)) out.set(c.currency, (out.get(c.currency) ?? 0) + cy.my_outstanding);
   }
-  return out.slice(0, 2);
+  return [...out.entries()];
 }
 
 export default function HomePage() {
-  const ctx = useSession();
-  const saved = useSaved(ctx.mode);
-  const overview = useOverviews(ctx, saved.items);
-  const [sheet, setSheet] = useState(false);
-  const { open, toggle } = useExpandable();
-  const assumed = ctx.mode === 'live';
-  const currency = resolveCurrency().code;
-
-  const loaded = useMemo(() => (overview.data ?? []).filter((i) => i.circle), [overview.data]);
-  const due = useMemo(() => loaded
-    .map((it) => ({ it, mine: myObligation(it.round, ctx.actor) }))
-    .filter((x) => x.it.round && x.mine && x.mine.outstanding > 0 && x.it.round.state !== 'FINALIZED')
-    .sort((a, b) => a.it.round!.due_date.localeCompare(b.it.round!.due_date))[0], [loaded, ctx.actor]);
-  const featured = loaded.find((i) => i.round && i !== due?.it) ?? due?.it ?? loaded[0];
-  const actions = useMemo(() => actionItems(loaded, ctx.actor), [loaded, ctx.actor]);
-
-  const focus = due?.it ?? featured;
-  const ledger = useApi(focus?.round ? `home-ledger:${sessionKey(ctx)}:${focus.round.id}` : null,
-    (signal) => api.getLedger(ctx, focus!.round!.id, signal));
-  const memberById = (id: string | null) => focus?.circle?.members.find((m) => m.id === id);
+  const session = useSession();
+  const circles = useApi(`circles:${sessionKey(session)}`, (s) => api.myCircles(session, s), { pollMs: 15000 });
+  const first = session.user?.name.split(' ')[0] ?? '';
 
   return (
-    <Screen brand right={<Link href="/app/profile" aria-label="Profile"><Avatar name={ctx.actor?.displayName ?? ctx.actor?.id ?? '?'} /></Link>}>
-      <div className="greeting">
-        <div className="grow">
-          <h1>{greeting()}{ctx.actor?.displayName ? `, ${ctx.actor.displayName}` : ''}</h1>
-          <p className="muted">{saved.items.circles.length === 0 ? 'Open a circle to get started' : `${saved.items.circles.length} circle${saved.items.circles.length === 1 ? '' : 's'} saved on this device`}</p>
-        </div>
-      </div>
-
-      <Button block icon="plus" onClick={() => setSheet(true)}>Open a circle</Button>
-
-      <div className="tiles">
-        <Link href="/app/circles" className="tile"><span className="tile__icon"><Icon name="circles" /></span>My circles</Link>
-        <Link href="/app/activity" className="tile"><span className="tile__icon"><Icon name="activity" /></span>Activity</Link>
-      </div>
-
-      {saved.items.circles.length === 0 && (
-        <EmptyState icon="circles" title="No circles yet" action={<Button onClick={() => setSheet(true)}>Open a circle</Button>}>
-          The backend can’t list your circles yet, so add one with its circle ID.
-        </EmptyState>
-      )}
-
-      {saved.items.circles.length > 0 && (
-        <DataBoundary state={overview} skeleton={<Skeleton count={3} />}>
-          {() => (
-            <>
-              {due?.it.round && due.it.circle && (
-                <DueCard circleName={due.it.circle.name} circleId={due.it.circle.id} round={due.it.round}
-                         mineOutstanding={due.mine!.outstanding} currency={currency} assumed={assumed} />
-              )}
-
-              {actions.length > 0 && (
-                <section className="stack" aria-label="Needs your attention">
-                  <SectionHead title="Needs your attention" />
-                  {actions.map((a) => (
-                    <Link key={a.id} href={a.href} className="card action-item">
-                      <span className="glyph glyph--warning"><Icon name={a.icon} /></span>
-                      <span className="grow"><strong>{a.title}</strong><span className="muted" style={{ display: 'block' }}>{a.body}</span></span>
-                      <Icon name="chevronRight" width={18} height={18} />
-                    </Link>
-                  ))}
-                </section>
-              )}
-
-              {featured?.circle && (
-                <section className="stack" aria-label="Featured circle">
-                  <SectionHead title="Your circles" action={<Link className="link" href="/app/circles">View all</Link>} />
-                  <CircleCard item={featured} actor={ctx.actor} currency={currency} assumed={assumed} />
-                </section>
-              )}
-
-              {ledger.data && ledger.data.length > 0 && (
-                <section className="card" aria-label="Recent activity">
-                  <SectionHead title="Recent activity" action={<Link className="link" href="/app/activity">See all</Link>} />
-                  <ul className="activity">
-                    {sortLedger(ledger.data).slice(0, 3).map((e) => (
-                      <ActivityRow key={e.id} event={e} memberById={memberById} demo={ctx.mode === 'demo'}
-                                   expanded={open === e.id} onToggle={() => toggle(e.id)} />
-                    ))}
-                  </ul>
-                </section>
-              )}
-              {loaded.length === 0 && (
-                <Banner tone="warning" icon="alert">None of your saved circles could be loaded. Open the Circles tab to see why.</Banner>
-              )}
-            </>
-          )}
-        </DataBoundary>
-      )}
-      <Banner tone="neutral" icon="info">Home shows circles saved on this device. A live account-wide summary arrives with the backend’s list endpoints.</Banner>
-      <OpenCircleSheet open={sheet} onClose={() => setSheet(false)} />
+    <Screen title={`${greeting()}${first ? `, ${first}` : ''}`} subtitle="Here’s what needs you across your circles."
+            actions={<LinkButton href="/app/circles/new" icon="plus" small>New circle</LinkButton>}>
+      <DataBoundary state={circles} skeleton={<Skeleton count={3} />}>
+        {(list) => <HomeBody circles={list} />}
+      </DataBoundary>
     </Screen>
+  );
+}
+
+function HomeBody({ circles }: { circles: MyCircle[] }) {
+  const attention = useMemo(() => circles.flatMap(circleAttention), [circles]);
+  const dues = duesByCurrency(circles);
+  const organizing = circles.filter((c) => c.my_role === 'organizer').length;
+
+  if (circles.length === 0) {
+    return (
+      <section className="card">
+        <EmptyState icon="circles" title="No circles yet"
+          action={<LinkButton href="/app/circles/new" icon="plus">Create your first circle</LinkButton>}>
+          Organizing a circle? Set it up in a couple of minutes. Joining one? Ask the organizer to invite your email,
+          and it will appear here automatically.
+        </EmptyState>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className="card card--brand hero-card" aria-label="Summary">
+        <div className="row row--between row--wrap">
+          <div>
+            <p className="muted small">You’re in {circles.length} circle{circles.length === 1 ? '' : 's'}{organizing ? ` · organizing ${organizing}` : ''}</p>
+            <h2>{dues.length ? 'Contributions due' : 'You’re all paid up'}</h2>
+          </div>
+          <span className="glyph" style={{ background: 'rgba(255,255,255,.16)', color: '#fff' }}><Icon name="wallet" /></span>
+        </div>
+        <div className="row row--wrap" style={{ gap: 18 }}>
+          {dues.length ? dues.map(([cur, minor]) => <Amount key={cur} minor={minor} currency={cur} size="xl" />)
+            : <span className="muted">Nothing is due from you right now.</span>}
+        </div>
+      </section>
+
+      <section className="stack" aria-label="Needs your attention">
+        <SectionHead title="Needs your attention" />
+        {attention.length === 0
+          ? <p className="muted">Nothing waiting on you. Rounds move forward as members pay and the organizer approves.</p>
+          : (
+            <div className="attention">
+              {attention.map((a) => (
+                <Link key={a.id} href={a.href} className="attention__item">
+                  <span className={`glyph glyph--${a.tone}`}><Icon name={a.icon} /></span>
+                  <span className="grow"><strong>{a.title}</strong><span className="muted small">{a.body}</span></span>
+                  <Icon name="chevronRight" />
+                </Link>
+              ))}
+            </div>
+          )}
+      </section>
+
+      <section className="stack" aria-label="Your circles">
+        <SectionHead title="Your circles" action={<Link className="link" href="/app/circles">View all <Icon name="chevronRight" /></Link>} />
+        <div className="circle-grid">
+          {circles.slice(0, 4).map((c) => <CircleCard key={c.id} c={c} />)}
+        </div>
+      </section>
+    </>
   );
 }

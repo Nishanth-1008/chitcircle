@@ -4,79 +4,86 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Icon } from '@/components/Icon';
 import { Screen } from '@/components/shell';
-import { Avatar, Banner, Button, StatusPill } from '@/components/ui';
+import { Avatar, Banner, Button, Card, Field, KeyValue, Pill } from '@/components/ui';
+import { useAppConfig } from '@/lib/appConfig';
 import { api } from '@/lib/api/endpoints';
-import { describeError } from '@/lib/api/errors';
-import { useSingleFlight } from '@/lib/hooks';
-import { useSaved } from '@/lib/saved';
+import { errorMessage } from '@/lib/api/errors';
+import { useAction } from '@/lib/hooks';
 import { useSession } from '@/lib/session';
+import { humanize } from '@/lib/status';
 import { useTheme, type ThemePref } from '@/lib/theme';
+import { useToast } from '@/lib/toast';
 
-const THEMES: { id: ThemePref; label: string }[] = [
-  { id: 'system', label: 'System' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' },
-];
+const THEMES: { id: ThemePref; label: string }[] = [{ id: 'system', label: 'System' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }];
 
 export default function ProfilePage() {
+  const session = useSession();
   const router = useRouter();
-  const ctx = useSession();
+  const toast = useToast();
   const { pref, setPref } = useTheme();
-  const saved = useSaved(ctx.mode);
+  const config = useAppConfig();
+  const user = session.user!;
+  const [email, setEmail] = useState(user.payout_email ?? '');
   const [health, setHealth] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const check = useSingleFlight(async () => {
-    try {
-      const h = await api.health(ctx);
-      setHealth({ ok: true, text: `Reachable (${h.status})` });
-    } catch (e) { setHealth({ ok: false, text: describeError(e).message }); }
+  const save = useAction(async () => {
+    const u = await api.setPayoutEmail(session, email.trim());
+    session.setUser(u);
+    toast('PayPal email saved');
+  });
+  const check = useAction(async () => {
+    try { const h = await api.health(session); setHealth({ ok: true, text: `Reachable (${h.status})` }); }
+    catch (e) { setHealth({ ok: false, text: errorMessage(e) }); }
   });
 
   return (
     <Screen title="Profile">
-      <section className="card row" aria-label="Account">
-        <Avatar name={ctx.actor?.displayName ?? ctx.actor?.id ?? '?'} />
-        <div className="grow">
-          <p style={{ fontWeight: 700 }}>{ctx.actor?.displayName ?? 'Signed in'}</p>
-          <p className="muted num" style={{ overflowWrap: 'anywhere' }}>ID {ctx.actor?.id}</p>
+      <div className="grid grid--2">
+        <div className="stack stack--lg">
+          <Card>
+            <div className="row">
+              <Avatar name={user.name} you />
+              <div className="grow"><h2>{user.name}</h2><p className="muted">{user.email}</p></div>
+              {user.role !== 'member' && <Pill tone="brand">{humanize(user.role)}</Pill>}
+            </div>
+          </Card>
+          <Card title="PayPal account" subtitle="Where invoices are sent and payouts are paid. Use a PayPal sandbox personal account while testing.">
+            <form className="stack" onSubmit={(e) => { e.preventDefault(); void save.run(); }}>
+              <Field label="PayPal email">
+                {(id) => <input id={id} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@personal.example.com" />}
+              </Field>
+              {user.payout_email && (
+                <p className="small">{user.payout_email_verified ? <span className="income"><Icon name="checkCircle" width={14} height={14} /> Verified</span>
+                  : <span className="muted">Not verified yet</span>}</p>
+              )}
+              {save.error && <Banner tone="danger">{save.error}</Banner>}
+              <Button type="submit" small disabled={save.pending || !email.trim() || email.trim() === user.payout_email}>{save.pending ? 'Saving…' : 'Save'}</Button>
+            </form>
+          </Card>
+          <Card title="Appearance">
+            <div className="segmented" role="group" aria-label="Theme">
+              {THEMES.map((t) => <button key={t.id} type="button" aria-pressed={pref === t.id} onClick={() => setPref(t.id)}>{t.label}</button>)}
+            </div>
+          </Card>
         </div>
-        <StatusPill tone={ctx.mode === 'demo' ? 'warning' : 'info'}>{ctx.mode === 'demo' ? 'Demo data' : 'Live API'}</StatusPill>
-      </section>
-
-      {ctx.mode === 'live' && (
-        <Banner tone="warning" icon="alert"><strong>Development identity.</strong> The backend trusts the ID and role sent by this browser. Replace with real authentication before deployment.</Banner>
-      )}
-
-      <section className="card stack" aria-label="Appearance">
-        <h3>Theme</h3>
-        <div className="segmented" role="group" aria-label="Theme">
-          {THEMES.map((t) => <button key={t.id} type="button" aria-pressed={pref === t.id} onClick={() => setPref(t.id)}>{t.label}</button>)}
+        <div className="stack stack--lg">
+          <Card title="Connection">
+            <KeyValue rows={[
+              ['Environment', config ? humanize(config.environment) : '…'],
+              ['Payment gateway', config ? (config.payment_gateway === 'paypal' ? 'PayPal sandbox' : 'Mock (no PayPal credentials)') : '…'],
+              ['Sandbox tools', config ? (config.sandbox_tools ? 'On' : 'Off') : '…'],
+            ]} />
+            <div className="row row--wrap">
+              <Button variant="secondary" small icon="refresh" disabled={check.pending} onClick={() => void check.run()}>{check.pending ? 'Checking…' : 'Check API'}</Button>
+              {health && <span className={health.ok ? 'income' : 'expense'}>{health.text}</span>}
+            </div>
+          </Card>
+          <Card title="More">
+            <Link href="/app/help" className="list__row"><Icon name="help" width={18} height={18} /><span className="grow">Help & how it works</span><Icon name="chevronRight" width={16} height={16} /></Link>
+          </Card>
+          <Button variant="secondary" block icon="signOut" onClick={() => { session.signOut(); router.replace('/welcome'); }}>Sign out</Button>
         </div>
-        <p className="muted">Saved on this device. “System” follows your phone’s setting.</p>
-      </section>
-
-      <section className="card stack" aria-label="Data on this device">
-        <h3>Saved on this device</h3>
-        <p className="muted">{saved.items.circles.length} circle{saved.items.circles.length === 1 ? '' : 's'}, {saved.items.rounds.length} round{saved.items.rounds.length === 1 ? '' : 's'}. These shortcuts live in this browser only; they are not account settings.</p>
-        <div className="row">
-          {ctx.mode === 'demo' && <Button variant="secondary" small onClick={saved.resetToDefault}>Reset demo data</Button>}
-          <Button variant="secondary" small onClick={saved.clear}>Clear saved</Button>
-        </div>
-      </section>
-
-      {ctx.mode === 'live' && (
-        <section className="card stack" aria-label="Connection">
-          <h3>Connection</h3>
-          <Button variant="secondary" small onClick={() => void check.run()} disabled={check.pending}>{check.pending ? 'Checking…' : 'Check API'}</Button>
-          {health && <p className={health.ok ? 'amount--income' : 'field__error'} role="status">{health.text}</p>}
-        </section>
-      )}
-
-      <section className="card" aria-label="More">
-        <div className="link-list">
-          <Link href="/app/help">Help &amp; what’s connected <Icon name="chevronRight" /></Link>
-        </div>
-      </section>
-
-      <Button variant="secondary" block icon="signOut" onClick={() => { ctx.signOut(); router.replace('/welcome'); }}>Sign out</Button>
+      </div>
     </Screen>
   );
 }

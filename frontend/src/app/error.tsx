@@ -1,13 +1,14 @@
 'use client';
 
-export default function GlobalError({ reset }: { error: Error; reset: () => void }) {
+export default function RootError({ error, reset }: { error: Error; reset: () => void }) {
   return (
-    <div className="frame"><div className="app"><main className="screen screen--plain" role="alert">
-      <div className="state">
-        <h1>Something went wrong</h1>
-        <p>The screen failed to load. Your data is unchanged.</p>
+    <main className="public__panel" style={{ minHeight: '100dvh' }}>
+      <div className="state" role="alert">
+        <div className="state__icon state__icon--danger" aria-hidden="true">!</div>
+        <h3>Something went wrong</h3>
+        <p>{error.message || 'An unexpected error occurred while showing this screen.'}</p>
         <button type="button" className="btn btn--primary" onClick={reset}>Try again</button>
       </div>
-    </main></div></div>
+    </main>
   );
 }

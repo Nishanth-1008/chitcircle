@@ -1,13 +1,31 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, Field, StrictInt
+
+
+class RegisterIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=8, max_length=128)
+    name: str = Field(min_length=1, max_length=200)
+    role: str = "member"
+
+
+class ContactIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class MemberSpec(BaseModel):
+    """A seat in a new circle. `email` invites a person (linked now if registered, else on sign-up)."""
+    name: Optional[str] = Field(default=None, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=255)
+    user_id: Optional[str] = None
 
 
 class CreateCircle(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     ruleset: dict
-    members: list[str]
+    members: list[Union[str, MemberSpec]]
 
 
 class NewRuleset(BaseModel):
@@ -75,3 +93,13 @@ class ExecuteMandateIn(BaseModel):
 
 class RevokeMandateIn(BaseModel):
     reason: Optional[str] = None
+
+
+class SandboxPaymentIn(BaseModel):
+    member_id: str
+    amount: Optional[StrictInt] = Field(default=None, description="minor units; defaults to the outstanding amount")
+    status: str = "COMPLETED"                   # COMPLETED | FAILED
+
+
+class SandboxPayoutIn(BaseModel):
+    status: str = "COMPLETED"                   # COMPLETED | FAILED

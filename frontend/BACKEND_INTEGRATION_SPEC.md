@@ -1,5 +1,10 @@
 # ChitCircle Frontend-to-Backend Integration Specification & Wireframes
 
+> **Superseded (Nov 2026).** This document describes the earlier demo-mode client with `X-Actor-*` sign-in and
+> device-saved circle IDs. The current web app uses JWT sessions, `GET /circles` and the other list endpoints, and
+> is documented in `frontend/README.md` and the root `README.md` (API section). Wireframes below remain a useful
+> reference for screen intent only.
+
 > **Target Audience:** Backend Engineers building, integrating, and testing FastAPI endpoints for the ChitCircle Next.js frontend.  
 > **Status:** Production Reference & Contract Specification  
 > **Frontend Stack:** Next.js 15 (App Router), TypeScript, Design Tokens (CSS), TanStack Query / custom hooks, Vitest.  

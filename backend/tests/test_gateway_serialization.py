@@ -100,6 +100,24 @@ def test_collection_invoice_carries_exact_jpy_amount():
     assert create["items"][0]["unit_amount"] == {"currency_code": "JPY", "value": "500"}
 
 
+def test_invoice_uses_paypal_v2_recipient_schema(monkeypatch):
+    monkeypatch.setattr(G, "resolve_contact_email", lambda session, member_id: "payer@personal.example.com")
+    res = G.PayPalGateway().create_collection(
+        idempotency_key="collection:c1:m1", member_id="m1", amount=Money(10_000, "USD"), description="round 1",
+        return_url="https://x/ok", cancel_url="https://x/cancel", session=object())
+    assert res.status == "CREATED" and res.provider_ref == "INV-1"
+    create = next(b for b in _bodies() if "items" in b)
+    assert "invoicer" not in create                       # the API account is the invoicer
+    assert create["primary_recipients"] == [{"billing_info": {"email_address": "payer@personal.example.com"}}]
+    assert create["detail"]["reference"] == "collection:c1:m1"     # maps the PAID webhook back to the obligation
+
+
+def test_paypal_error_reason_is_readable():
+    body = '{"name":"INVALID_REQUEST","details":[{"field":"/currency_code","description":"Currency Code is not valid."}]}'
+    assert G._paypal_error(body).startswith("Currency Code is not valid.")
+    assert G._paypal_error("<html>") == "unexpected response"
+
+
 def test_payout_carries_exact_kwd_amount():
     gw = G.PayPalGateway()
     res = gw._submit_payouts_api("payout:s1", "m1", Money(1234, "KWD"))

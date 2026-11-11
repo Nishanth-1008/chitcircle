@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError } from './api/errors';
+import { ApiError, errorMessage } from './api/errors';
 
 export interface ApiState<T> {
   data: T | undefined;
@@ -14,11 +14,18 @@ export interface ApiState<T> {
 
 interface Internal<T> { key: string | null; data?: T; error?: ApiError | Error; loading: boolean; updatedAt: number | null }
 
+export interface ApiOptions {
+  /** Re-fetch on an interval (ms) while the tab is visible. */
+  pollMs?: number;
+  /** Re-fetch when the window regains focus. Default true. */
+  refetchOnFocus?: boolean;
+}
+
 /**
- * Fetch hook with request cancellation, explicit loading/error state, and stale-data retention.
- * `key` identifies the resource (include mode + actor + ids). `null` disables the request.
+ * Fetch hook with cancellation, explicit loading/error state and stale-data retention.
+ * `key` identifies the resource (include the user + ids). `null` disables the request.
  */
-export function useApi<T>(key: string | null, fetcher: (signal: AbortSignal) => Promise<T>): ApiState<T> {
+export function useApi<T>(key: string | null, fetcher: (signal: AbortSignal) => Promise<T>, opts: ApiOptions = {}): ApiState<T> {
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
   const [tick, setTick] = useState(0);
@@ -40,6 +47,20 @@ export function useApi<T>(key: string | null, fetcher: (signal: AbortSignal) => 
   }, [key, tick]);
 
   const refetch = useCallback(() => setTick((t) => t + 1), []);
+
+  const { pollMs, refetchOnFocus = true } = opts;
+  useEffect(() => {
+    if (key === null || !pollMs) return;
+    const t = window.setInterval(() => { if (document.visibilityState === 'visible') refetch(); }, pollMs);
+    return () => window.clearInterval(t);
+  }, [key, pollMs, refetch]);
+  useEffect(() => {
+    if (key === null || !refetchOnFocus) return;
+    const onFocus = () => refetch();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [key, refetchOnFocus, refetch]);
+
   const current = state.key === key;
   return {
     data: current ? state.data : undefined,
@@ -53,8 +74,7 @@ export function useApi<T>(key: string | null, fetcher: (signal: AbortSignal) => 
 
 /**
  * Prevents duplicate submissions: while one call is in flight, further calls are ignored (return undefined).
- * Use for every command (bids, approvals, payout requests) in later phases. The ref flips synchronously so a
- * double-tap in the same frame cannot slip through before React re-renders.
+ * The ref flips synchronously so a double-tap in the same frame cannot slip through before React re-renders.
  */
 export function useSingleFlight<A extends unknown[], R>(fn: (...args: A) => Promise<R>) {
   const fnRef = useRef(fn);
@@ -73,4 +93,19 @@ export function useSingleFlight<A extends unknown[], R>(fn: (...args: A) => Prom
     }
   }, []);
   return { run, pending };
+}
+
+/** A single-flight command with its own error message; errors are captured, never thrown to React. */
+export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>) {
+  const [error, setError] = useState<string | null>(null);
+  const flight = useSingleFlight(async (...args: A) => {
+    setError(null);
+    try {
+      return await fn(...args);
+    } catch (e) {
+      setError(errorMessage(e));
+      return undefined;
+    }
+  });
+  return { run: flight.run, pending: flight.pending, error, clearError: () => setError(null) };
 }

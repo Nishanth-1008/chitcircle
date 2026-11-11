@@ -36,6 +36,14 @@ def _get_env() -> dict:
         # Feature switches (see §13.4): kill switches for agent proposal / mandate execution.
         "AGENT_PROPOSAL_ENABLED": os.getenv("AGENT_PROPOSAL_ENABLED", "true"),
         "AGENT_EXECUTION_ENABLED": os.getenv("AGENT_EXECUTION_ENABLED", "true"),
+        # "paypal" (default when PAYPAL_CLIENT_ID is set) or "mock".
+        "PAYMENT_GATEWAY": os.getenv("PAYMENT_GATEWAY", ""),
+        # Where the web app lives; used for PayPal return/cancel URLs.
+        "APP_BASE_URL": os.getenv("APP_BASE_URL", "http://localhost:3000"),
+        # Sandbox tools simulate provider confirmations. Always off in production.
+        "SANDBOX_TOOLS": os.getenv("SANDBOX_TOOLS", "true"),
+        # Print every OpenTelemetry span to stdout (local debugging only).
+        "OTEL_CONSOLE_EXPORT": os.getenv("OTEL_CONSOLE_EXPORT", "false").strip().lower(),
     }
 
 
@@ -125,6 +133,13 @@ def allow_actor_headers() -> bool:
     if is_production():
         return False
     return _get_env()["ALLOW_ACTOR_HEADERS"].strip().lower() in ("1", "true", "yes")
+
+
+def sandbox_tools_enabled() -> bool:
+    """Simulated provider confirmations (payments, payouts). Never available in production."""
+    if is_production():
+        return False
+    return _get_env()["SANDBOX_TOOLS"].strip().lower() in ("1", "true", "yes")
 
 
 def config_problems() -> list:
