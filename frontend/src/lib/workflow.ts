@@ -1,5 +1,6 @@
 /** Role-aware "what happens next" derived from server state. Decides what to SHOW; the server decides what is allowed. */
 import type { IconName } from '@/components/Icon';
+import { agentsHref, circleCycleHref, circleHref, settlementHref } from './routes';
 import { isAuction } from './ruleset';
 import type { CycleState, CycleSummary, MyCircle } from './types';
 
@@ -27,20 +28,20 @@ export interface Attention {
 
 export function circleAttention(c: MyCircle): Attention[] {
   const out: Attention[] = [];
-  const base = `/app/circles/${encodeURIComponent(c.id)}`;
+  const base = circleHref(c.id);
   const org = c.my_role === 'organizer';
   if (org && c.pending_actions > 0) {
     out.push({ id: `${c.id}:agents`, icon: 'bot', tone: 'brand', title: `${c.pending_actions} proposed action${c.pending_actions === 1 ? '' : 's'} to review`,
-      body: `${c.name} · collections agent`, href: `${base}/agents` });
+      body: `${c.name} · collections agent`, href: agentsHref(c.id) });
   }
   const cy = c.current_cycle;
   if (!cy) {
     if (org) out.push({ id: `${c.id}:start`, icon: 'play', tone: 'brand', title: 'Start the first round', body: c.name, href: base });
     return out;
   }
-  const round = `${base}/cycles/${encodeURIComponent(cy.id)}`;
+  const round = circleCycleHref(c.id, cy.id);
   const label = `${c.name} · Round ${cy.number}`;
-  const settlement = cy.settlement_id ? `/app/settlements/${encodeURIComponent(cy.settlement_id)}` : round;
+  const settlement = cy.settlement_id ? settlementHref(cy.settlement_id) : round;
   if (c.my_member_id && cy.my_outstanding && cy.my_outstanding > 0 && paymentOpen(c.payout_mode, cy)) {
     out.push({ id: `${cy.id}:pay`, icon: 'wallet', tone: 'warning', title: 'Your contribution is due', body: label, href: round });
   }

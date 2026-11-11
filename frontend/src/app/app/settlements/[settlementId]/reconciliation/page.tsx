@@ -5,6 +5,7 @@ import { Icon } from '@/components/Icon';
 import { Screen } from '@/components/shell';
 import { Banner, Button, Card, Pill, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
+import { settlementHref } from '@/lib/routes';
 import { useApi } from '@/lib/hooks';
 import { reconcileLabel } from '@/lib/reconcile';
 import { sessionKey, useSession } from '@/lib/session';
@@ -23,7 +24,7 @@ export default function ReconciliationPage() {
   return (
     <Screen
       title="Reconciliation"
-      back={{ href: `/app/settlements/${encodeURIComponent(settlementId)}`, label: st.data ? `Settlement · Round ${st.data.cycle_number}` : 'Settlement' }}
+      back={{ href: settlementHref(settlementId), label: st.data ? `Settlement · Round ${st.data.cycle_number}` : 'Settlement' }}
       subtitle="Payments, the payout and the ledger checked against each other. A round finalizes only when all three are clean."
       actions={<Button variant="secondary" small icon="refresh" onClick={() => { rep.refetch(); st.refetch(); }}>Re-run checks</Button>}
     >
