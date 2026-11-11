@@ -10,6 +10,7 @@ import {
   Skeleton, Stat, Tabs,
 } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
+import { activityHref, agentsHref, circleCycleHref, circleHref } from '@/lib/routes';
 import { formatDate } from '@/lib/format';
 import { useAction, useApi } from '@/lib/hooks';
 import { describeRules, isAuction, payoutModeTitle } from '@/lib/ruleset';
@@ -43,8 +44,8 @@ export default function CirclePage() {
             <span>{c.members.length} members</span>
           </>}
           actions={<>
-            <LinkButton href={`/app/activity?circle=${encodeURIComponent(c.id)}`} variant="secondary" small icon="activity">Activity</LinkButton>
-            {c.my_role === 'organizer' && <LinkButton href={`/app/circles/${encodeURIComponent(c.id)}/agents`} variant="soft" small icon="bot">Approvals</LinkButton>}
+            <LinkButton href={activityHref(c.id)} variant="secondary" small icon="activity">Activity</LinkButton>
+            {c.my_role === 'organizer' && <LinkButton href={agentsHref(c.id)} variant="soft" small icon="bot">Approvals</LinkButton>}
           </>}
         >
           <Tabs label="Circle sections" value={tab} onChange={setTab} tabs={[
@@ -64,7 +65,7 @@ export default function CirclePage() {
   );
 }
 
-const roundHref = (c: CircleView, cy: { id: string }) => `/app/circles/${encodeURIComponent(c.id)}/cycles/${encodeURIComponent(cy.id)}`;
+const roundHref = (c: CircleView, cy: { id: string }) => circleCycleHref(c.id, cy.id);
 
 function Overview({ c, cycles, onChanged }: { c: CircleView; cycles: CycleSummary[] | undefined; onChanged: () => void }) {
   const session = useSession();
@@ -135,7 +136,7 @@ function Overview({ c, cycles, onChanged }: { c: CircleView; cycles: CycleSummar
                   </ul>
                 )}
                 {d.collections.late > 0 && (
-                  <LinkButton href={`/app/circles/${encodeURIComponent(c.id)}/agents`} variant="soft" small icon="bot">Ask the collections agent to follow up</LinkButton>
+                  <LinkButton href={agentsHref(c.id)} variant="soft" small icon="bot">Ask the collections agent to follow up</LinkButton>
                 )}
               </Card>
             )}

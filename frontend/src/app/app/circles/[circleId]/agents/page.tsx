@@ -6,6 +6,7 @@ import { DataBoundary } from '@/components/domain';
 import { Screen } from '@/components/shell';
 import { Amount, Banner, Button, Card, EmptyState, Field, KeyValue, Modal, Pill, Skeleton, Tabs } from '@/components/ui';
 import { api } from '@/lib/api/endpoints';
+import { circleHref } from '@/lib/routes';
 import { formatDate, formatDateTime } from '@/lib/format';
 import { useAction, useApi } from '@/lib/hooks';
 import { sessionKey, useSession } from '@/lib/session';
@@ -39,7 +40,7 @@ export default function AgentsPage() {
   return (
     <DataBoundary state={circle} skeleton={<div className="page"><Skeleton count={3} /></div>}>
       {(c) => (
-        <Screen title="Approvals" back={{ href: `/app/circles/${encodeURIComponent(c.id)}`, label: c.name }}
+        <Screen title="Approvals" back={{ href: circleHref(c.id), label: c.name }}
           subtitle="Agents propose. You approve with step-up verification. Only then can the action run, exactly once."
           actions={<Button icon="bot" disabled={run.pending} onClick={() => void run.run()}>{run.pending ? 'Scanning…' : 'Run collections agent'}</Button>}>
           {run.error && <Banner tone="danger">{run.error}</Banner>}
